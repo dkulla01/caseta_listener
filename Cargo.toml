@@ -1,0 +1,18 @@
+[package]
+name = "caseta_listener"
+version = "0.1.0"
+edition = "2021"
+
+#[lib]
+#path = "src/lib.rs"
+#
+#[[bin]]
+#path = "src/main.rs"
+#name = "caseta_listener"
+
+[dependencies]
+bytes = "1.1.0"
+env_logger = "0.9.0"
+futures = "0.3.17"
+log = "0.4.14"
+tokio = {version = "1.15.0", features = ["full"]}
