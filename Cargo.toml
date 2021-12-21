@@ -3,12 +3,12 @@ name = "caseta_listener"
 version = "0.1.0"
 edition = "2021"
 
-#[lib]
-#path = "src/lib.rs"
-#
-#[[bin]]
-#path = "src/main.rs"
-#name = "caseta_listener"
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "caseta_listener"
 
 [dependencies]
 bytes = "1.1.0"
