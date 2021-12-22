@@ -1,9 +1,8 @@
 use std::io;
 
 use tokio::net::TcpStream;
-use caseta_listener::casetta::{Message, CasetaConnection};
+use caseta_listener::caseta::{Message, CasetaConnection};
 
-// type Result<T> = std::result::Result<T, String>;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -22,7 +21,6 @@ async fn main() -> io::Result<()> {
     } else {
         panic!("expected to read the login prompt but got nothing");
     }
-
 
     connection.log_in().await.expect("unable to log in");
 

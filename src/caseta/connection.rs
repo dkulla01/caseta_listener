@@ -2,7 +2,7 @@ use tokio::io::{BufWriter, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use bytes::BytesMut;
-use crate::casetta::message::Message;
+use crate::caseta::message::Message;
 use std::str::FromStr;
 
 pub struct CasetaConnection {
