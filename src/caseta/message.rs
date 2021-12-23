@@ -1,10 +1,9 @@
 use std::str::FromStr;
 use std::fmt::Display;
-use crate::caseta::ButtonEventType::*;
 
 #[derive(Debug)]
 pub enum Message {
-    ButtonEvent{remote_id: u8, event: ButtonEventType},
+    ButtonEvent{remote_id: u8, button_id: ButtonId, button_action: ButtonAction},
     LoggedIn,
     LoginPrompt,
     PasswordPrompt
@@ -22,15 +21,14 @@ impl FromStr for Message {
         } else if s.starts_with("GNET>") {
             return Ok(Message::LoggedIn);
         } else if s.starts_with("~DEVICE") {
-            println!("got line: {}", s);
             let parts : Vec<&str> = s.trim().split(",").collect();
             let remote_id: u8 = parts[1].parse().expect("only integer values are allowed");
             let button_id: u8 = parts[2].parse().expect("only integer values are allowed");
             let button_action_value : u8 = parts[3].parse().expect("only integers are allowed, but got {}");
             let parsed_message = Message::ButtonEvent {
                 remote_id,
-                event: ButtonEventType::from_ids(button_id, button_action_value)
-                    .expect(format!("got invalid ids: {}, {}", button_id, button_action_value).as_str())
+                button_id: ButtonId::from_id(button_id).expect("got an invalid button ID"),
+                button_action: ButtonAction::from_id(button_action_value).expect("got an invalid button action ID")
             };
             return Ok(parsed_message);
         }
@@ -45,42 +43,44 @@ impl Display for Message {
             Message::LoginPrompt => write!(f, "LoginPrompt"),
             Message::PasswordPrompt => write!(f, "PasswordPrompt"),
             Message::LoggedIn => write!(f, "LoggedIn"),
-            Message::ButtonEvent{remote_id, event} => write!(f, "ButtonDown, remote_id: {}, event_type: {}", remote_id, event)
+            Message::ButtonEvent{remote_id, button_id, button_action} => write!(f, "ButtonDown, remote_id: {}, button_id: {}, button_action: {}", remote_id, button_id, button_action)
+        }
+    }
+}
+#[derive(enum_display_derive::Display, Debug)]
+pub enum ButtonId {
+    PowerOn,
+    Up,
+    Favorite,
+    Down,
+    PowerOff
+}
+
+impl ButtonId {
+    fn from_id(id: u8) -> Result<ButtonId, String>{
+        match id {
+            2 => Ok(ButtonId::PowerOn),
+            5 => Ok(ButtonId::Up),
+            3 => Ok(ButtonId::Favorite),
+            6 => Ok(ButtonId::Down),
+            8 => Ok(ButtonId::PowerOff),
+            _ => Err(format!("{} is not a valid button id", id))
         }
     }
 }
 
-
 #[derive(enum_display_derive::Display, Debug)]
-pub enum ButtonEventType {
-    PowerOnButtonPressed,
-    PowerOnButtonReleased,
-    UpButtonPressed,
-    UpButtonReleased,
-    FavoriteButtonPressed,
-    FavoriteButtonReleased,
-    DownButtonPressed,
-    DownButtonReleased,
-    PowerOffButtonPressed,
-    PowerOffButtonReleased,
-
+pub enum ButtonAction {
+    Press,
+    Release
 }
 
-impl ButtonEventType {
-    pub
-    fn from_ids(button_id: u8, button_action_id: u8) -> Result<ButtonEventType, String>{
-        match (button_id, button_action_id) {
-            (2, 3) => Ok(PowerOnButtonPressed),
-            (2, 4) => Ok(PowerOnButtonReleased),
-            (5, 3) => Ok(UpButtonPressed),
-            (5, 4) => Ok(UpButtonReleased),
-            (3, 3) => Ok(FavoriteButtonPressed),
-            (3, 4) => Ok(FavoriteButtonReleased),
-            (6, 3) => Ok(DownButtonPressed),
-            (6, 4) => Ok(DownButtonReleased),
-            (4, 3) => Ok(PowerOffButtonPressed),
-            (4, 4) => Ok(PowerOnButtonReleased),
-            (_1, _2) => Err(format!("button_id {}, action_id {} is not a valid button id", _1, _2))
+impl ButtonAction {
+    fn from_id(id: u8) -> Result<ButtonAction, String> {
+        match id {
+            3 => Ok(ButtonAction::Press),
+            4 => Ok(ButtonAction::Release),
+            _ => Err(format!("{} is not a valid button action", id))
         }
     }
 }
