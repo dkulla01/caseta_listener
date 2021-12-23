@@ -16,19 +16,19 @@ struct ButtonHistory {
 }
 
 enum ButtonLifecycle {
-    AwaitingFirstPress,
-    AwaitingFirstRelease,
-    AwaitingSecondPress,
-    AwaitingSecondRelease
+    NotClicked,
+    Click,
+    ClickRelease,
+    ClickReleaseSecondclick
 }
 
 impl ButtonLifecycle {
     fn from_button_history(button_history: &ButtonHistory) -> Result<ButtonLifecycle, String> {
         match (button_history.first_press, button_history.first_release, button_history.second_press) {
-            (None, None, None) => Ok(ButtonLifecycle::AwaitingFirstPress),
-            (Some(_), None, None) => Ok(ButtonLifecycle::AwaitingFirstRelease),
-            (Some(_), Some(_), None) => Ok(ButtonLifecycle::AwaitingSecondPress),
-            (Some(_), Some(_), Some(_)) => Ok(ButtonLifecycle::AwaitingSecondRelease),
+            (None, None, None) => Ok(ButtonLifecycle::NotClicked),
+            (Some(_), None, None) => Ok(ButtonLifecycle::Click),
+            (Some(_), Some(_), None) => Ok(ButtonLifecycle::ClickRelease),
+            (Some(_), Some(_), Some(_)) => Ok(ButtonLifecycle::ClickReleaseSecondclick),
             _ => Err(format!("got an invalid button history"))
         }
     }
@@ -37,10 +37,10 @@ impl ButtonLifecycle {
 impl Display for ButtonLifecycle {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            ButtonLifecycle::AwaitingFirstPress => write!(f, "AwaitingFirstPress"),
-            ButtonLifecycle::AwaitingFirstRelease => write!(f, "AwaitingFirstRelease"),
-            ButtonLifecycle::AwaitingSecondPress => write!(f, "AwaitingSecondPress"),
-            ButtonLifecycle::AwaitingSecondRelease => write!(f, "AwaitingSecondRelease")
+            ButtonLifecycle::NotClicked => write!(f, "Not clicked -- AwaitingFirstPress"),
+            ButtonLifecycle::Click => write!(f, "Click - AwaitingFirstRelease"),
+            ButtonLifecycle::ClickRelease => write!(f, "ClickRelease - AwaitingSecondPress"),
+            ButtonLifecycle::ClickReleaseSecondclick => write!(f, "ClickReleaseSecondclick - AwaitingSecondRelease")
         }
     }
 }
@@ -55,30 +55,34 @@ impl ButtonHistory {
         }
     }
 
-    fn transition_to_next_lifecycle_stage(&mut self, now: Instant) -> Result<(), String> {
+    fn transition_to_next_lifecycle_stage(&mut self, now: Instant, button_action: ButtonAction) -> Result<(), String> {
         let button_lifecycle = ButtonLifecycle::from_button_history(self)?;
-        match button_lifecycle {
-            ButtonLifecycle::AwaitingFirstPress => {
+        match (button_lifecycle, button_action)  {
+            (ButtonLifecycle::NotClicked, ButtonAction::Press) => {
                 self.first_press = Some(now);
             },
-            ButtonLifecycle::AwaitingFirstRelease => {
-                self.first_release = Some(now);
-            },
-            ButtonLifecycle::AwaitingSecondPress => {
-                // if more time than the double click duration has elapsed, treat this second press like a "first press"
-                // and go back to the beginning
+            (ButtonLifecycle::Click, ButtonAction::Release) => {
+                // if more time than the double click duration has elapsed, treat this first release like
+                // a return to beginning and go back to the beginning
                 let elapsed_so_far = now.duration_since(self.first_press.unwrap());
                 if (elapsed_so_far.gt(&DOUBLE_CLICK_WINDOW)) {
-                    self.first_press = Some(now);
+                    self.first_press = None;
                     self.first_release = None;
+                    self.second_press = None;
                 } else {
-                    self.second_press = Some(now);
+                    self.first_release = Some(now);
                 }
             },
-            ButtonLifecycle::AwaitingSecondRelease => {
+            (ButtonLifecycle::ClickRelease, ButtonAction::Press) => {
+                self.second_press = Some(now);
+            },
+            (ButtonLifecycle::ClickReleaseSecondclick, ButtonAction::Release) => {
                 self.first_press = None;
                 self.first_release = None;
                 self.second_press = None;
+            },
+            (_lifecycle, _action) => {
+                return Err(format!("got an invalid lifecycle ({}) and action ({}) combo", _lifecycle, _action))
             }
         }
 
@@ -89,7 +93,7 @@ impl ButtonHistory {
         let button_lifecycle = ButtonLifecycle::from_button_history(self)
             .expect("got an invalid button lifecycle");
         match button_lifecycle {
-            ButtonLifecycle::AwaitingSecondRelease => {
+            ButtonLifecycle::ClickReleaseSecondclick => {
                 let duration_between_clicks = self.second_press.unwrap() - self.first_press.unwrap();
                 duration_between_clicks.gt(&DOUBLE_CLICK_WINDOW)
             }
@@ -127,7 +131,7 @@ async fn main() -> io::Result<()> {
                 let now = Instant::now();
                 let button_key = &format!("{}-{}", remote_id, button_id)[..];
                 let button_history = history_map.entry(button_key.to_string()).or_insert(ButtonHistory::new());
-                button_history.transition_to_next_lifecycle_stage(now);
+                button_history.transition_to_next_lifecycle_stage(now, button_action);
                 let current_stage = ButtonLifecycle::from_button_history(button_history)
                     .expect("we should have a valid stage here");
                 println!("button-key: {}, current stage {}", button_key, current_stage);
