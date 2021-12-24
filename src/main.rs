@@ -4,103 +4,33 @@ use tokio::net::TcpStream;
 use caseta_listener::caseta::{Message, CasetaConnection, ButtonId, ButtonAction};
 use caseta_listener::caseta::Message::ButtonEvent;
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
-use std::fmt::Display;
+use std::time::Duration;
+use std::collections::hash_map::Entry;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(250);
 
-struct ButtonHistory {
-    first_press: Option<Instant>,
-    first_release: Option<Instant>,
-    second_press: Option<Instant>,
+struct ButtonWatcher {
+    remote_id: u8,
+    button_id: ButtonId,
+    press_count: u8,
+    release_count: u8,
+    event_receiver: Receiver<ButtonAction>
 }
 
-enum ButtonLifecycle {
-    NotClicked,
-    Click,
-    ClickRelease,
-    ClickReleaseSecondclick
-}
-
-impl ButtonLifecycle {
-    fn from_button_history(button_history: &ButtonHistory) -> Result<ButtonLifecycle, String> {
-        match (button_history.first_press, button_history.first_release, button_history.second_press) {
-            (None, None, None) => Ok(ButtonLifecycle::NotClicked),
-            (Some(_), None, None) => Ok(ButtonLifecycle::Click),
-            (Some(_), Some(_), None) => Ok(ButtonLifecycle::ClickRelease),
-            (Some(_), Some(_), Some(_)) => Ok(ButtonLifecycle::ClickReleaseSecondclick),
-            _ => Err(format!("got an invalid button history"))
+impl ButtonWatcher {
+    fn new(receiver: Receiver<ButtonAction>, remote_id: u8, button_id: ButtonId) -> ButtonWatcher {
+        ButtonWatcher {
+            remote_id: remote_id,
+            button_id: button_id,
+            press_count: 0,
+            release_count: 0,
+            event_receiver: receiver
         }
     }
 }
 
-impl Display for ButtonLifecycle {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            ButtonLifecycle::NotClicked => write!(f, "Not clicked -- AwaitingFirstPress"),
-            ButtonLifecycle::Click => write!(f, "Click - AwaitingFirstRelease"),
-            ButtonLifecycle::ClickRelease => write!(f, "ClickRelease - AwaitingSecondPress"),
-            ButtonLifecycle::ClickReleaseSecondclick => write!(f, "ClickReleaseSecondclick - AwaitingSecondRelease")
-        }
-    }
-}
-
-impl ButtonHistory {
-
-    fn new() -> ButtonHistory {
-        ButtonHistory {
-            first_press: None,
-            first_release: None,
-            second_press: None
-        }
-    }
-
-    fn transition_to_next_lifecycle_stage(&mut self, now: Instant, button_action: ButtonAction) -> Result<(), String> {
-        let button_lifecycle = ButtonLifecycle::from_button_history(self)?;
-        match (button_lifecycle, button_action)  {
-            (ButtonLifecycle::NotClicked, ButtonAction::Press) => {
-                self.first_press = Some(now);
-            },
-            (ButtonLifecycle::Click, ButtonAction::Release) => {
-                // if more time than the double click duration has elapsed, treat this first release like
-                // a return to beginning and go back to the beginning
-                let elapsed_so_far = now.duration_since(self.first_press.unwrap());
-                if (elapsed_so_far.gt(&DOUBLE_CLICK_WINDOW)) {
-                    self.first_press = None;
-                    self.first_release = None;
-                    self.second_press = None;
-                } else {
-                    self.first_release = Some(now);
-                }
-            },
-            (ButtonLifecycle::ClickRelease, ButtonAction::Press) => {
-                self.second_press = Some(now);
-            },
-            (ButtonLifecycle::ClickReleaseSecondclick, ButtonAction::Release) => {
-                self.first_press = None;
-                self.first_release = None;
-                self.second_press = None;
-            },
-            (_lifecycle, _action) => {
-                return Err(format!("got an invalid lifecycle ({}) and action ({}) combo", _lifecycle, _action))
-            }
-        }
-
-        Ok(())
-    }
-
-    fn has_been_double_clicked(&self) -> bool {
-        let button_lifecycle = ButtonLifecycle::from_button_history(self)
-            .expect("got an invalid button lifecycle");
-        match button_lifecycle {
-            ButtonLifecycle::ClickReleaseSecondclick => {
-                let duration_between_clicks = self.second_press.unwrap() - self.first_press.unwrap();
-                duration_between_clicks.gt(&DOUBLE_CLICK_WINDOW)
-            }
-            _ => false
-        }
-    }
-}
+type ButtonWatcherDb = HashMap<String, Sender<ButtonAction>>;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -109,7 +39,8 @@ async fn main() -> io::Result<()> {
     let mut connection = CasetaConnection::new(stream);
 
     let contents = connection.read_frame().await.expect("something weird happened");
-    let mut history_map : HashMap<String, ButtonHistory> = HashMap::new();
+    let mut button_watchers : ButtonWatcherDb= HashMap::new();
+
 
     if let Some(message) = contents {
         if let Message::LoginPrompt = message{
@@ -127,19 +58,37 @@ async fn main() -> io::Result<()> {
         let contents = connection.read_frame().await.expect("something weird, again");
         match contents {
             Some(ButtonEvent { remote_id, button_id, button_action }) => {
-                // println!("got contents: {}", contents.unwrap());
-                let now = Instant::now();
-                let button_key = &format!("{}-{}", remote_id, button_id)[..];
-                let button_history = history_map.entry(button_key.to_string()).or_insert(ButtonHistory::new());
-                button_history.transition_to_next_lifecycle_stage(now, button_action);
-                let current_stage = ButtonLifecycle::from_button_history(button_history)
-                    .expect("we should have a valid stage here");
-                println!("button-key: {}, current stage {}", button_key, current_stage);
+                let button_key = format!("{}-{}", remote_id, button_id);
+                match button_watchers.entry(button_key) {
+                    Entry::Occupied(entry) => {
+                        entry.get().send(button_action).await.unwrap();
+                    },
+                    Entry::Vacant(entry) => {
+                        let (sender, receiver) = mpsc::channel(16);
+                        let button_watcher = ButtonWatcher::new(receiver, remote_id, button_id);
+                        let output = sender.send(button_action).await;
+                        match output {
+                            Ok(_) => println!("inserted!"),
+                            Err(x) => println!("uh oh...: {:?}", x)
+                        }
+
+                        entry.insert(sender);
+
+                        tokio::spawn(button_watcher_loop(button_watcher));
+                    }
+                }
+
                 // add to events map
                 // spawn a watcher task
             },
             Some(_) => println!("{}", contents.unwrap()),
             None => println!("got a frame with nothing in it")
         }
+    }
+}
+
+async fn button_watcher_loop(mut watcher: ButtonWatcher) {
+    while let Some(event) = watcher.event_receiver.recv().await {
+        println!("remote: {}, buttonId: {}, got event: {}", watcher.remote_id, watcher.button_id, event)
     }
 }
