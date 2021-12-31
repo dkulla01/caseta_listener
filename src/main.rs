@@ -61,7 +61,6 @@ async fn main() -> io::Result<()> {
     let mut connection = CasetaConnection::new(stream);
 
     let contents = connection.read_frame().await.expect("something weird happened");
-    let mut button_watchers : ButtonWatcherDb= HashMap::new();
 
 
     if let Some(message) = contents {
@@ -76,6 +75,7 @@ async fn main() -> io::Result<()> {
 
     connection.log_in().await.expect("unable to log in");
 
+    let mut button_watchers : ButtonWatcherDb = HashMap::new();
     loop {
         let contents = connection.read_frame().await.expect("something weird, again");
         match contents {
@@ -84,11 +84,10 @@ async fn main() -> io::Result<()> {
                 match button_watchers.entry(button_key) {
                     Entry::Occupied(mut entry) => {
                         let mut button_watcher = entry.get();
-                        let mut history = button_watcher.button_history.lock().unwrap();
+                        let history = button_watcher.button_history.clone();
+                        let mut history =  history.lock().unwrap();
                         if history.finished {
-                            entry.remove();
                             entry.insert(ButtonWatcher::new(remote_id, button_id));
-
                         } else {
                             history.increment(button_action)
                         }
@@ -99,8 +98,8 @@ async fn main() -> io::Result<()> {
                             ButtonAction::Release => {}, // no-op for an errant release
                             ButtonAction::Press => {
                                 let button_watcher = ButtonWatcher::new(remote_id, button_id);
-                                entry.insert(button_watcher);
-                                tokio::spawn(button_watcher_loop(button_watcher));
+                                // entry.insert(button_watcher)
+                                tokio::spawn(button_watcher_loop(entry.insert(button_watcher)));
                             }
                         }
                     }
@@ -112,7 +111,7 @@ async fn main() -> io::Result<()> {
     }
 }
 
-async fn button_watcher_loop(mut watcher: ButtonWatcher) {
+async fn button_watcher_loop<'a>(mut watcher: &'a ButtonWatcher) {
 
     // sleep for a smidge, then check the button state
     sleep(DOUBLE_CLICK_WINDOW).await;
