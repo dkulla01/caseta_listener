@@ -4,12 +4,9 @@ use tokio::net::TcpStream;
 use caseta_listener::caseta::{Message, CasetaConnection, ButtonId, ButtonAction};
 use caseta_listener::caseta::Message::ButtonEvent;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::hash_map::Entry;
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::macros::support::Future;
 use tokio::time::sleep;
-use tokio::task::JoinHandle;
 use std::sync::{Arc, Mutex};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
@@ -52,7 +49,7 @@ impl ButtonHistory {
         }
     }
 }
-type ButtonWatcherDb = HashMap<String, ButtonWatcher>;
+type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -87,7 +84,7 @@ async fn main() -> io::Result<()> {
                         let history = button_watcher.button_history.clone();
                         let mut history =  history.lock().unwrap();
                         if history.finished {
-                            entry.insert(ButtonWatcher::new(remote_id, button_id));
+                            entry.insert(Arc::new(ButtonWatcher::new(remote_id, button_id)));
                         } else {
                             history.increment(button_action)
                         }
@@ -97,9 +94,9 @@ async fn main() -> io::Result<()> {
                         match button_action {
                             ButtonAction::Release => {}, // no-op for an errant release
                             ButtonAction::Press => {
-                                let button_watcher = ButtonWatcher::new(remote_id, button_id);
-                                // entry.insert(button_watcher)
-                                tokio::spawn(button_watcher_loop(entry.insert(button_watcher)));
+                                let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id));
+                                entry.insert(button_watcher.clone());
+                                tokio::spawn(button_watcher_loop(button_watcher));
                             }
                         }
                     }
@@ -111,12 +108,12 @@ async fn main() -> io::Result<()> {
     }
 }
 
-async fn button_watcher_loop<'a>(mut watcher: &'a ButtonWatcher) {
+async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
 
     // sleep for a smidge, then check the button state
     sleep(DOUBLE_CLICK_WINDOW).await;
     {
-        let mut first_history = watcher.button_history.clone();
+        let first_history = watcher.button_history.clone();
         let mut locked_history = first_history.lock().unwrap();
         let press_count = locked_history.press_count;
         let release_count = locked_history.release_count;
@@ -139,7 +136,7 @@ async fn button_watcher_loop<'a>(mut watcher: &'a ButtonWatcher) {
         }
     }
     loop {
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100)).await;
         let history = watcher.button_history.clone();
         let mut locked_history = history.lock().unwrap();
         let press_count = locked_history.press_count;
