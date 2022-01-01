@@ -45,7 +45,7 @@ impl ButtonHistory {
     fn increment(&mut self, button_action : ButtonAction) {
         match button_action {
             ButtonAction::Press => self.press_count += 1,
-            ButtonAction::Release => self.press_count += 1
+            ButtonAction::Release => self.release_count += 1
         }
     }
 }
@@ -80,11 +80,14 @@ async fn main() -> io::Result<()> {
                 let button_key = format!("{}-{}", remote_id, button_id);
                 match button_watchers.entry(button_key) {
                     Entry::Occupied(mut entry) => {
-                        let mut button_watcher = entry.get();
+                        let button_watcher = entry.get();
                         let history = button_watcher.button_history.clone();
                         let mut history =  history.lock().unwrap();
                         if history.finished {
-                            entry.insert(Arc::new(ButtonWatcher::new(remote_id, button_id)));
+                            let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id));
+                            button_watcher.button_history.lock().unwrap().increment(button_action);
+                            entry.insert(button_watcher.clone());
+                            tokio::spawn(button_watcher_loop(button_watcher));
                         } else {
                             history.increment(button_action)
                         }
@@ -95,6 +98,7 @@ async fn main() -> io::Result<()> {
                             ButtonAction::Release => {}, // no-op for an errant release
                             ButtonAction::Press => {
                                 let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id));
+                                button_watcher.button_history.lock().unwrap().increment(button_action);
                                 entry.insert(button_watcher.clone());
                                 tokio::spawn(button_watcher_loop(button_watcher));
                             }
@@ -109,7 +113,9 @@ async fn main() -> io::Result<()> {
 }
 
 async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
-
+    let button_id = &watcher.button_id;
+    let remote_id = watcher.remote_id;
+    println!("tracking remote {}, button {}", remote_id, button_id);
     // sleep for a smidge, then check the button state
     sleep(DOUBLE_CLICK_WINDOW).await;
     {
@@ -123,10 +129,10 @@ async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
             locked_history.finished = true;
             return;
         } else if press_count == 1 && release_count == 0 {
-            println!("a long press has been started");
+            print!("a long press has been started...");
             // send the "long_press_started" event
         } else if press_count >= 2 && release_count != press_count {
-            println!("a double press has started but not finished");
+            print!("a double press has started but not finished...");
             // this is a no-op
         } else if press_count > 2 && release_count == press_count {
             println!("a double press has finished");
@@ -142,13 +148,13 @@ async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
         let press_count = locked_history.press_count;
         let release_count = locked_history.release_count;
         if press_count == 1 && release_count == 0 {
-            println!("a long press is in progress");
-        } else if press_count == 1 && release_count == 1{
+            println!("long press...");
+        } else if press_count == 1 && release_count == 1 {
             println!("a long press has finished!");
             locked_history.finished = true;
             return;
         } else if press_count >= 2 && press_count > release_count {
-            println!("a double click has started but not finished")
+            println!("double press...")
         } else if press_count >= 2 && press_count == release_count {
             println!("a double click has finished");
             locked_history.finished = true;
