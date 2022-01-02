@@ -21,16 +21,6 @@
           "color": "this is where we'd set the color."
         }
       ]
-    },
-    {
-      "name": "pleasant white light",
-      "devices": [
-        {
-          "id": "...",
-          "type": "hue_color_bulb",
-          "color": "another color"
-        }
-      ]
     }
   ]
 }

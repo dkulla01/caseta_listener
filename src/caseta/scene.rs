@@ -24,13 +24,43 @@ enum Device {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::BufReader;
     use crate::caseta::scene::*;
+    use spectral::prelude::*;
 
     #[test]
     fn it_deserializes() {
-        let living_room = File::open("src/living_room.json").expect("this file should always be here");
-        let room : Room = serde_json::from_reader(BufReader::new(living_room)).expect("unable to deserialize scene");
+        let living_room_configuration = r#"
+           {
+              "name": "living_room",
+              "remotes": [1, 2],
+              "scenes": [
+                {
+                  "name": "miami vice flamingo",
+                  "devices": [
+                    {
+                      "id": "...",
+                      "type": "hue_color_bulb",
+                      "color": "this is where we'd set the color I suppose"
+                    },
+                    {
+                      "id": "...",
+                      "type": "nanoleaf_shapes",
+                      "color": "this is where we'd specify the scene name"
+                    },
+                    {
+                      "id": "...",
+                      "type": "hue_color_bulb",
+                      "color": "this is where we'd set the color."
+                    }
+                  ]
+                }
+              ]
+            }
+        "#;
+        let room : Room = serde_json::from_str(living_room_configuration)
+            .expect("unable to deserialize scene");
+        assert_that(&room.name).is_equal_to(String::from("living_room"));
+        assert_that(&room.scenes).has_length(1);
+        assert_that(&room.scenes[0].devices).has_length(3);
     }
 }
