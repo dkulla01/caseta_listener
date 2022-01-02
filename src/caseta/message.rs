@@ -1,9 +1,11 @@
 use std::str::FromStr;
 use std::fmt::Display;
 
+pub type RemoteId = u8;
+
 #[derive(Debug)]
 pub enum Message {
-    ButtonEvent{remote_id: u8, button_id: ButtonId, button_action: ButtonAction},
+    ButtonEvent{remote_id: RemoteId, button_id: ButtonId, button_action: ButtonAction},
     LoggedIn,
     LoginPrompt,
     PasswordPrompt
