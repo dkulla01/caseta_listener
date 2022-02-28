@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 pub type RemoteId = u8;
 
@@ -24,9 +24,9 @@ impl FromStr for Message {
             return Ok(Message::LoggedIn);
         } else if s.starts_with("~DEVICE") {
             let parts : Vec<&str> = s.trim().split(",").collect();
-            let remote_id: u8 = parts[1].parse().expect("only integer values are allowed");
-            let button_id: u8 = parts[2].parse().expect("only integer values are allowed");
-            let button_action_value : u8 = parts[3].parse().expect("only integers are allowed, but got {}");
+            let remote_id: u8 = parts[1].parse().expect(format!("only integer values are allowed here, but got {}", parts[1]).as_str());
+            let button_id: u8 = parts[2].parse().expect(format!("only integer values are allowed here, but got {}", parts[2]).as_str());
+            let button_action_value : u8 = parts[3].parse().expect(format!("only integers are allowed, but got {}", parts[3]).as_str());
             let parsed_message = Message::ButtonEvent {
                 remote_id,
                 button_id: ButtonId::from_id(button_id).expect("got an invalid button ID"),
@@ -35,7 +35,7 @@ impl FromStr for Message {
             return Ok(parsed_message);
         }
 
-        Err("this is also not a thing".into())
+        Err(format!("got an un-parseable message: {}", s))
     }
 }
 
