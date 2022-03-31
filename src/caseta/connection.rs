@@ -7,7 +7,6 @@ use crate::caseta::message::Message;
 use std::str::FromStr;
 use anyhow::{anyhow, Context, Result};
 use thiserror::Error;
-use crate::caseta::connection::CasetaConnectionError::BadAddress;
 
 
 #[derive(Error, Debug)]
@@ -24,7 +23,7 @@ enum CasetaConnectionError {
 
 }
 
-struct CasetaConnection {
+pub struct CasetaConnection {
     address: IpAddr,
     port: u16,
     internal_caseta_connection: Option<InternalCasetaConnection>
@@ -46,7 +45,7 @@ impl CasetaConnection {
 
         let tcp_stream = TcpStream::connect((self.address, self.port))
             .await
-            .with_context(|| BadAddress(format!("{}:{}", self.address, self.port)))?;
+            .with_context(|| CasetaConnectionError::BadAddress(format!("{}:{}", self.address, self.port)))?;
 
         let mut internal_caseta_connection = InternalCasetaConnection::new(tcp_stream);
         internal_caseta_connection.log_in().await?;
@@ -84,7 +83,7 @@ impl InternalCasetaConnection {
         }
     }
 
-    pub async fn read_frame(&mut self) -> Result<Option<Message>> {
+    pub async fn read_frame(&mut self) -> Result<Option<Message>, CasetaConnectionError> {
 
         let mut buffer = BytesMut::with_capacity(128);
         let num_bytes_read = self.stream.read_buf(&mut buffer).await.expect("uh oh, there was a problem");
@@ -92,7 +91,7 @@ impl InternalCasetaConnection {
             if buffer.is_empty() {
                 return Ok(None)
             } else {
-                return Err("uh oh".into());
+                return Err(CasetaConnectionError::EmptyMessage);
             }
         }
         let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
@@ -105,7 +104,7 @@ impl InternalCasetaConnection {
         match message {
             Ok(Some(content)) => Ok(content),
             Ok(None) => Err(CasetaConnectionError::EmptyMessage),
-            Err(err) => Err(CasetaConnectionError::Unknown(format!("unknown error: {}", err)))
+            Err(err) => Err(err)
         }
     }
 

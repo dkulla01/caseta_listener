@@ -1,13 +1,13 @@
-use std::io;
-
 use tokio::net::TcpStream;
 use caseta_listener::caseta::{Message, CasetaConnection, ButtonId, ButtonAction};
 use caseta_listener::caseta::Message::ButtonEvent;
 use std::collections::HashMap;
 use std::time::{Duration};
 use std::collections::hash_map::Entry;
+use std::net::{IpAddr, Ipv4Addr};
 use tokio::time::sleep;
 use std::sync::{Arc, Mutex};
+use anyhow::Result;
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
@@ -52,29 +52,16 @@ impl ButtonHistory {
 type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    let stream = TcpStream::connect("192.168.86.144:23").await?;
-
-    let mut connection = CasetaConnection::new(stream);
-
-    let contents = connection.read_frame().await.expect("something weird happened");
-
-
-    if let Some(message) = contents {
-        if let Message::LoginPrompt = message{
-            println!("great! we're able to log in")
-        } else {
-            panic!("expected a login prompt, but got nothing")
-        }
-    } else {
-        panic!("expected to read the login prompt but got nothing");
-    }
-
-    connection.log_in().await.expect("unable to log in");
+async fn main() -> Result<()> {
+    let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
+    let port = 23;
+    let mut connection = CasetaConnection::new(caseta_address, port);
+    connection.initialize()
+        .await?;
 
     let mut button_watchers : ButtonWatcherDb = HashMap::new();
     loop {
-        let contents = connection.read_frame().await.expect("something weird, again");
+        let contents = connection.await_message().await.expect("something weird, again");
         match contents {
             Some(ButtonEvent { remote_id, button_id, button_action }) => {
                 let button_key = format!("{}-{}", remote_id, button_id);
