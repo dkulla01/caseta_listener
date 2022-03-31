@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::fmt::{Debug, Display};
+use anyhow::anyhow;
 
 pub type RemoteId = u8;
 
@@ -29,8 +30,8 @@ impl FromStr for Message {
             let button_action_value : u8 = parts[3].parse().expect(format!("only integers are allowed, but got {}", parts[3]).as_str());
             let parsed_message = Message::ButtonEvent {
                 remote_id,
-                button_id: ButtonId::from_id(button_id).expect("got an invalid button ID"),
-                button_action: ButtonAction::from_id(button_action_value).expect("got an invalid button action ID")
+                button_id: button_id.try_into().expect("got an invalid button ID"),
+                button_action: button_action_value.try_into().expect("got an invalid button action ID")
             };
             return Ok(parsed_message);
         }
@@ -58,15 +59,17 @@ pub enum ButtonId {
     PowerOff
 }
 
-impl ButtonId {
-    fn from_id(id: u8) -> Result<ButtonId, String>{
+impl TryFrom<u8> for ButtonId {
+    type Error = anyhow::Error;
+
+    fn try_from(id: u8) -> Result<Self, anyhow::Error> {
         match id {
             2 => Ok(ButtonId::PowerOn),
             5 => Ok(ButtonId::Up),
             3 => Ok(ButtonId::Favorite),
             6 => Ok(ButtonId::Down),
-            8 => Ok(ButtonId::PowerOff),
-            _ => Err(format!("{} is not a valid button id", id))
+            4 => Ok(ButtonId::PowerOff),
+            _ => Err(anyhow!("{} is not a valid button id", id))
         }
     }
 }
@@ -77,12 +80,13 @@ pub enum ButtonAction {
     Release
 }
 
-impl ButtonAction {
-    fn from_id(id: u8) -> Result<ButtonAction, String> {
+impl TryFrom<u8> for ButtonAction {
+    type Error = anyhow::Error;
+    fn try_from(id: u8) -> Result<Self, Self::Error> {
         match id {
             3 => Ok(ButtonAction::Press),
             4 => Ok(ButtonAction::Release),
-            _ => Err(format!("{} is not a valid button action", id))
+            _ => Err(anyhow!("{} is not a valid button action", id))
         }
     }
 }
