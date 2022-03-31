@@ -1,13 +1,14 @@
-use tokio::net::TcpStream;
-use caseta_listener::caseta::{Message, CasetaConnection, ButtonId, ButtonAction};
-use caseta_listener::caseta::Message::ButtonEvent;
-use std::collections::HashMap;
-use std::time::{Duration};
 use std::collections::hash_map::Entry;
-use std::net::{IpAddr, Ipv4Addr};
-use tokio::time::sleep;
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use anyhow::Result;
+use tokio::time::sleep;
+
+use caseta_listener::caseta::{ButtonAction, ButtonId, CasetaConnection};
+use caseta_listener::caseta::Message::ButtonEvent;
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
@@ -63,7 +64,7 @@ async fn main() -> Result<()> {
     loop {
         let contents = connection.await_message().await.expect("something weird, again");
         match contents {
-            Some(ButtonEvent { remote_id, button_id, button_action }) => {
+            ButtonEvent { remote_id, button_id, button_action } => {
                 let button_key = format!("{}-{}", remote_id, button_id);
                 match button_watchers.entry(button_key) {
                     Entry::Occupied(mut entry) => {
@@ -93,8 +94,7 @@ async fn main() -> Result<()> {
                     }
                 }
             },
-            Some(_) => println!("{}", contents.unwrap()),
-            None => println!("got a frame with nothing in it")
+            _ => println!("got an unexpected message type: {}", contents)
         }
     }
 }

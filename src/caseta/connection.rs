@@ -18,6 +18,8 @@ enum CasetaConnectionError {
     Authentication,
     #[error("got an empty message when we expected a message with content")]
     EmptyMessage,
+    #[error("encountered an error initializing connection to the caseta hub")]
+    Initialization,
     #[error("unknown caseta connection error")]
     Unknown(String)
 
@@ -49,6 +51,7 @@ impl CasetaConnection {
 
         let mut internal_caseta_connection = InternalCasetaConnection::new(tcp_stream);
         internal_caseta_connection.log_in().await?;
+        self.internal_caseta_connection = Some(internal_caseta_connection);
 
         // start keep-alive message writer
 
@@ -121,34 +124,47 @@ impl InternalCasetaConnection {
 
     pub async fn log_in(&mut self) -> Result<(), CasetaConnectionError> {
         let mutex = self.logged_in.clone();
-        let mut is_logged_in = mutex.lock().unwrap();
+        let is_logged_in = mutex.lock().unwrap();
         if *is_logged_in {
             return Ok(());
         }
 
-        self.write("lutron\r\n").await.expect("uh oh....");
-        let contents = self.read_frame().await.expect("something weird happened");
-
-        if let Some(value) = contents {
-            println!("got contents: {}", value);
+        let contents = self.read_frame().await;
+        match contents {
+            Ok(Some(Message::LoginPrompt)) => println!("got login prompt"),
+            _ => {
+                // todo: add more match arms and log the appropriate errors here
+                return Err(CasetaConnectionError::Initialization)
+            }
         }
-        self.write("integration\r\n").await.expect("again, uh oh");
-        let contents = self.read_frame().await.expect("something weird, again");
+        self.write("lutron\r\n").await.expect("uh oh....");
+        let contents = self.read_frame().await;
+        match contents {
+            Ok(Some(Message::PasswordPrompt)) => println!("got password prompt"),
+            _ => {
+                // todo: add more match arms and log the appropriate errors here
+                return Err(CasetaConnectionError::Authentication)
+            }
+        }
+        if let Ok(()) = self.write("integration\r\n").await {
+        } else {
+            println!("got an error logging in");
+            return Err(CasetaConnectionError::Authentication)
+        }
+
+        let contents = self.read_frame().await;
 
 
         match contents {
-            Some(message) => {
-                if let Message::LoggedIn = message {
-                    println!("got contents: {}", message);
-                    *is_logged_in = true;
-                    return Ok(())
-                }
-                println!("expected GNET> message, but got {}", message);
+            Ok(Some(Message::LoggedIn)) => {
+                return Ok(());
+            },
+            Ok(Some(other_message)) => {
+                println!("expected GNET> message, but got {}", other_message);
                 Err(CasetaConnectionError::Authentication)
             }
             _ => Err(CasetaConnectionError::Authentication)
         }
-
     }
 
     async fn write_keep_alive_message(&mut self) -> Result<(), String>{
