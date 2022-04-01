@@ -5,9 +5,8 @@ use std::sync::{Arc, Mutex};
 use bytes::BytesMut;
 use crate::caseta::message::Message;
 use std::str::FromStr;
-use anyhow::{anyhow, Context, format_err, Result};
+use anyhow::{anyhow, Result};
 use thiserror::Error;
-use crate::caseta::Message::PasswordPrompt;
 
 
 #[derive(Error, Debug)]
