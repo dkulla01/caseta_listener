@@ -1,16 +1,23 @@
+use std::error::Error;
+use std::io;
 use std::net::IpAddr;
-use tokio::io::{BufWriter, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use std::sync::{Arc, Mutex};
-use bytes::BytesMut;
-use crate::caseta::message::Message;
 use std::str::FromStr;
-use anyhow::{anyhow, Result};
-use thiserror::Error;
 
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use bytes::BytesMut;
+use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::net::TcpStream;
+use tokio::select;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::channel;
+
+use crate::caseta::message::Message;
+use crate::caseta::Message::PasswordPrompt;
 
 #[derive(Error, Debug)]
-enum CasetaConnectionError {
+pub enum CasetaConnectionError {
 
     #[error("unable to connect to address {0}")]
     BadAddress(String),
@@ -22,20 +29,29 @@ enum CasetaConnectionError {
     Initialization,
     #[error("this connection has not been initialized yet")]
     Uninitialized,
-    #[error("unknown caseta connection error")]
-    Unknown(String)
-
+    #[error("encountered a problem reading/writing messages with caseta")]
+    ReadWriteIo(#[from] io::Error),
+    #[error("encountered a problem writing the keepalive message")]
+    KeepAlive,
 }
 
-pub struct CasetaConnection {
+// we'll rework this naming later
+#[async_trait]
+pub trait CasetaConnection {
+    async fn initialize(&mut self) -> Result<(), CasetaConnectionError>;
+    async fn await_message(&mut self) -> Result<Message, CasetaConnectionError>;
+    async fn write(&mut self, message: &str) -> Result<(), CasetaConnectionError>;
+}
+
+pub struct DelegatingCasetaConnection {
     address: IpAddr,
     port: u16,
     internal_caseta_connection: Option<InternalCasetaConnection>
 }
 
-impl CasetaConnection {
-    pub fn new(address: IpAddr, port: u16) -> CasetaConnection {
-        CasetaConnection {
+impl DelegatingCasetaConnection {
+    pub fn new(address: IpAddr, port: u16) -> DelegatingCasetaConnection {
+        DelegatingCasetaConnection {
             address,
             port,
             internal_caseta_connection: Option::None
@@ -71,35 +87,31 @@ impl CasetaConnection {
     }
 }
 
+#[derive(Debug)]
+enum DisconnectCommand {
+    OnError{ message: String, cause: CasetaConnectionError }
+}
+
 struct InternalCasetaConnection {
     address: IpAddr,
     port: u16,
     stream: Option<BufWriter<TcpStream>>,
-    logged_in: Arc<Mutex<bool>>
+    logged_in: bool,
+    disconnect_sender: mpsc::Sender<DisconnectCommand>,
+    disconnect_receiver: mpsc::Receiver<DisconnectCommand>
 }
 
 impl InternalCasetaConnection {
     fn new(address: IpAddr, port: u16) -> InternalCasetaConnection {
+         let (disconnect_sender, mut disconnect_receiver) = mpsc::channel(64);
         InternalCasetaConnection {
             address,
             port,
             stream: Option::None,
-            logged_in: Arc::new(Mutex::new(false))
+            logged_in: false,
+            disconnect_sender,
+            disconnect_receiver
         }
-    }
-
-    async fn initialize(&mut self) -> Result<(), CasetaConnectionError> {
-        let tcp_stream = TcpStream::connect((self.address, self.port))
-            .await;
-
-        match tcp_stream {
-            Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
-            Err(e) => {
-                // print the error
-                return Err(CasetaConnectionError::BadAddress(format!("{}:{}", self.address, self.port)));
-            }
-        }
-     self.log_in().await
     }
 
     async fn read_frame(&mut self) -> Result<Option<Message>, CasetaConnectionError> {
@@ -109,49 +121,37 @@ impl InternalCasetaConnection {
         };
 
         let mut buffer = BytesMut::with_capacity(128);
-        let num_bytes_read = stream.read_buf(&mut buffer).await.expect("uh oh, there was a problem");
-        if num_bytes_read == 0 {
-            if buffer.is_empty() {
-                return Ok(None)
-            } else {
-                return Err(CasetaConnectionError::EmptyMessage);
+        let ref mut disconnect_recv = self.disconnect_receiver;
+
+        let stream_read_future = stream.read_buf(&mut buffer);
+        let disconnect_recv_future = disconnect_recv.recv();
+        tokio::select! {
+            read_result = stream_read_future => {
+                let num_bytes_read = read_result.expect("there was a problem reading the buffer");
+                if num_bytes_read == 0 {
+                    if buffer.is_empty() {
+                        return Ok(None)
+                    } else {
+                        return Err(CasetaConnectionError::EmptyMessage);
+                    }
+                }
+                let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
+                let message = Message::from_str(contents).expect(format!("expected a valid message but got {}", contents).as_str());
+                return Ok(Some(message))
+            }
+            disconnect_command = disconnect_recv_future => {
+                match disconnect_command {
+                    Some(DisconnectCommand::OnError {cause, message}) => {
+                        println!("encountered an error communicating with the caseta hub: {}", message);
+                        return Err(cause);
+                    }
+                }
             }
         }
-        let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
-        let message = Message::from_str(contents).expect(format!("expected a valid message but got {}", contents).as_str());
-        Ok(Some(message))
-    }
-
-    async fn await_message(&mut self) -> Result<Message, CasetaConnectionError> {
-        let message = self.read_frame().await;
-        match message {
-            Ok(Some(content)) => Ok(content),
-            Ok(None) => Err(CasetaConnectionError::EmptyMessage),
-            Err(err) => Err(err)
-        }
-    }
-
-    async fn write(&mut self, message: &str) -> Result<(), CasetaConnectionError> {
-        let stream = match self.stream {
-            Some(ref mut buf_writer) => buf_writer,
-            None => return Err(CasetaConnectionError::Uninitialized)
-        };
-        let outcome = stream.write(message.as_bytes())
-            .await;
-
-        match outcome {
-            Ok(_) => {},
-            Err(e) => return Err(CasetaConnectionError::Unknown(format!("got an unknown error: {}", e)))
-        }
-
-        stream.flush().await.expect("couldn't flush the buffer");
-        Ok(())
     }
 
     async fn log_in(&mut self) -> Result<(), CasetaConnectionError> {
-        let mutex = self.logged_in.clone();
-        let is_logged_in = mutex.lock().unwrap();
-        if *is_logged_in {
+        if self.logged_in {
             return Ok(());
         }
 
@@ -183,6 +183,7 @@ impl InternalCasetaConnection {
 
         match contents {
             Ok(Some(Message::LoggedIn)) => {
+                self.logged_in = true;
                 return Ok(());
             },
             Ok(Some(other_message)) => {
@@ -193,8 +194,71 @@ impl InternalCasetaConnection {
         }
     }
 
-    async fn write_keep_alive_message(&mut self) -> Result<(), String>{
-        self.write("\r\n").await
+    async fn write_keep_alive_message(&mut self) -> Result<(), CasetaConnectionError> {
+        let write_result = self.write("\r\n").await;
+        match write_result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.disconnect_sender.send(
+                    DisconnectCommand::OnError {
+                        message: "there was a problem writing the keepalive message".into(),
+                        cause: e
+                    }
+                ).await
+                .expect("unrecoverable error");
+                return Err(CasetaConnectionError::KeepAlive)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl CasetaConnection for InternalCasetaConnection {
+
+    async fn initialize(&mut self) -> Result<(), CasetaConnectionError> {
+        let tcp_stream = TcpStream::connect((self.address, self.port))
+            .await;
+
+        match tcp_stream {
+            Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
+            Err(e) => {
+                // print the error
+                return Err(CasetaConnectionError::BadAddress(format!("{}:{}", self.address, self.port)));
+            }
+        }
+        self.log_in().await
     }
 
+
+    async fn await_message(&mut self) -> Result<Message, CasetaConnectionError> {
+        let message = self.read_frame().await;
+        match message {
+            Ok(Some(content)) => Ok(content),
+            Ok(None) => Err(CasetaConnectionError::EmptyMessage),
+            Err(err) => Err(err)
+        }
+    }
+
+    async fn write(&mut self, message: &str) -> Result<(), CasetaConnectionError> {
+        let stream = match self.stream {
+            Some(ref mut buf_writer) => buf_writer,
+            None => return Err(CasetaConnectionError::Uninitialized)
+        };
+        let outcome = stream.write(message.as_bytes())
+            .await;
+
+        match outcome {
+            Ok(_) => {},
+            Err(e) => return Err(CasetaConnectionError::ReadWriteIo(e))
+        }
+
+        let outcome = stream.flush().await;
+        match outcome {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("couldn't flush the buffer");
+                Err(CasetaConnectionError::ReadWriteIo(e))
+            }
+        }
+    }
 }
