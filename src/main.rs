@@ -7,8 +7,9 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::time::sleep;
 
-use caseta_listener::caseta::{ButtonAction, ButtonId, DelegatingCasetaConnection};
+use caseta_listener::caseta::{ButtonAction, ButtonId};
 use caseta_listener::caseta::Message::ButtonEvent;
+use caseta_listener::caseta::{CasetaConnection, CasetaConnectionError};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
@@ -56,7 +57,7 @@ type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
 async fn main() -> Result<()> {
     let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
     let port = 23;
-    let mut connection = DelegatingCasetaConnection::new(caseta_address, port);
+    let mut connection = CasetaConnection::new(caseta_address, port);
     connection.initialize()
         .await?;
 
