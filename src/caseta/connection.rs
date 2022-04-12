@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::io;
 use std::net::IpAddr;
@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
+use tracing::instrument;
 
 use crate::caseta::message::Message;
 
@@ -77,6 +78,12 @@ pub struct CasetaConnection<'a> {
     disconnect_receiver: mpsc::Receiver<DisconnectCommand>
 }
 
+impl Debug for CasetaConnection<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CasetaConnection").finish()
+    }
+}
+
 impl <'a>  CasetaConnection<'a> {
     pub fn new(tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
         let (disconnect_sender, mut disconnect_receiver) = mpsc::channel(64);
@@ -126,6 +133,7 @@ impl <'a>  CasetaConnection<'a> {
         }
     }
 
+    #[instrument]
     async fn log_in(&mut self) -> Result<(), CasetaConnectionError> {
         if self.logged_in {
             return Ok(());
@@ -133,19 +141,33 @@ impl <'a>  CasetaConnection<'a> {
 
         let contents = self.read_frame().await;
         match contents {
-            Ok(Some(Message::LoginPrompt)) => println!("got login prompt"),
-            _ => {
-                // todo: add more match arms and log the appropriate errors here
+            Ok(Some(Message::LoginPrompt)) => tracing::trace!("received the login prompt"),
+            Ok(Some(unexpected_message)) => {
+                tracing::error!("got a weird random message: {:?}", unexpected_message);
                 return Err(CasetaConnectionError::Initialization)
             }
+            Ok(None) => {
+                tracing::error!("got an empty message");
+                return Err(CasetaConnectionError::Initialization);
+            }
+            Err(e) => {
+                tracing::error!("got an error: {:?}", e);
+            }
         }
-        self.write("lutron\r\n").await.expect("uh oh....");
+        self.write("lutron\r\n").await?;
         let contents = self.read_frame().await;
         match contents {
-            Ok(Some(Message::PasswordPrompt)) => println!("got password prompt"),
-            _ => {
-                // todo: add more match arms and log the appropriate errors here
-                return Err(CasetaConnectionError::Authentication)
+            Ok(Some(Message::PasswordPrompt)) => tracing::trace!("got password prompt"),
+            Ok(Some(unexpected_message)) => {
+                tracing::error!("got a weird random message: {:?}", unexpected_message);
+                return Err(CasetaConnectionError::Authentication);
+            }
+            Ok(None) => {
+                tracing::error!("got an empty message");
+                return Err(CasetaConnectionError::Authentication);
+            }
+            Err(e) => {
+                tracing::error!("got an error: {:?}", e);
             }
         }
         if let Ok(()) = self.write("integration\r\n").await {

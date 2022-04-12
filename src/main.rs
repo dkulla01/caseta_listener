@@ -6,6 +6,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use tokio::time::sleep;
+use tracing::subscriber::set_global_default;
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
+use tracing_subscriber::{EnvFilter, Registry};
+use tracing_subscriber::layer::SubscriberExt;
 
 use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider};
 use caseta_listener::caseta::Message::ButtonEvent;
@@ -55,6 +59,20 @@ type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let formatting_layer = BunyanFormattingLayer::new(
+        "caseta_listener".into(),
+        std::io::stdout
+    );
+
+    let subscriber = Registry::default()
+        .with(env_filter)
+        .with(JsonStorageLayer)
+        .with(formatting_layer);
+
+    set_global_default(subscriber).expect("Failed to set subscriber");
+
     let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
     let port = 23;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
