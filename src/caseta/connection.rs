@@ -1,25 +1,26 @@
 use std::error::Error;
 use std::fmt::Debug;
+use std::future::Future;
 use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
 use bytes::BytesMut;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
+use async_trait::async_trait;
 
 use crate::caseta::message::Message;
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {
 
-    #[error("unable to connect to address {0}")]
-    BadAddress(String),
+    #[error("unable to connect to address")]
+    BadAddress,
     #[error("there was a problem authenticating with the caseta hub")]
     Authentication,
     #[error("the connection to the caseta hub was disconnected")]
@@ -45,21 +46,42 @@ struct DisconnectCommand {
     cause: CasetaConnectionError
 }
 
-pub struct CasetaConnection {
+#[async_trait]
+pub trait TcpSocketProvider {
+    async fn new_socket(&self) -> io::Result<TcpStream>;
+}
+
+pub struct DefaultTcpSocketProvider {
     address: IpAddr,
-    port: u16,
+    port: u16
+}
+
+impl DefaultTcpSocketProvider {
+    pub fn new(address: IpAddr, port: u16) -> Self {
+        DefaultTcpSocketProvider{ address, port}
+    }
+}
+
+#[async_trait]
+impl TcpSocketProvider for DefaultTcpSocketProvider {
+    async fn new_socket(&self) -> io::Result<TcpStream> {
+        Ok(TcpStream::connect((self.address, self.port)).await?)
+    }
+}
+
+pub struct CasetaConnection<'a> {
+    tcp_socket_provider: &'a (dyn TcpSocketProvider + 'a),
     stream: Option<BufWriter<TcpStream>>,
     logged_in: bool,
     disconnect_sender: mpsc::Sender<DisconnectCommand>,
     disconnect_receiver: mpsc::Receiver<DisconnectCommand>
 }
 
-impl CasetaConnection {
-    pub fn new(address: IpAddr, port: u16) -> CasetaConnection {
+impl <'a>  CasetaConnection<'a> {
+    pub fn new(tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
         let (disconnect_sender, mut disconnect_receiver) = mpsc::channel(64);
         CasetaConnection {
-            address,
-            port,
+            tcp_socket_provider,
             stream: Option::None,
             logged_in: false,
             disconnect_sender,
@@ -167,14 +189,14 @@ impl CasetaConnection {
     }
 
     pub async fn initialize(&mut self) -> Result<(), CasetaConnectionError> {
-        let tcp_stream = TcpStream::connect((self.address, self.port))
+        let tcp_stream = self.tcp_socket_provider.new_socket()
             .await;
 
         match tcp_stream {
             Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
             Err(e) => {
                 // print the error
-                return Err(CasetaConnectionError::BadAddress(format!("{}:{}", self.address, self.port)));
+                return Err(CasetaConnectionError::BadAddress);
             }
         }
         self.log_in().await

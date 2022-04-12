@@ -4,10 +4,10 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use tokio::time::sleep;
 
-use caseta_listener::caseta::{ButtonAction, ButtonId};
+use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider};
 use caseta_listener::caseta::Message::ButtonEvent;
 use caseta_listener::caseta::{CasetaConnection, CasetaConnectionError};
 
@@ -57,15 +57,16 @@ type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
 async fn main() -> Result<()> {
     let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
     let port = 23;
-    let mut connection = CasetaConnection::new(caseta_address, port);
+    let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
+    let mut connection = CasetaConnection::new(&tcp_socket_provider);
     connection.initialize()
         .await?;
 
     let mut button_watchers : ButtonWatcherDb = HashMap::new();
     loop {
-        let contents = connection.await_message().await.expect("something weird, again");
+        let contents = connection.await_message().await;
         match contents {
-            ButtonEvent { remote_id, button_id, button_action } => {
+            Ok(ButtonEvent { remote_id, button_id, button_action }) => {
                 let button_key = format!("{}-{}", remote_id, button_id);
                 match button_watchers.entry(button_key) {
                     Entry::Occupied(mut entry) => {
@@ -95,7 +96,15 @@ async fn main() -> Result<()> {
                     }
                 }
             },
-            _ => println!("got an unexpected message type: {}", contents)
+            Ok(unexpected_contents) => println!("got an unexpected message type: {}", unexpected_contents),
+            Err(CasetaConnectionError::Disconnected) => {
+                println!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
+                connection = CasetaConnection::new(&tcp_socket_provider);
+                connection.initialize().await?;
+            }
+            Err(other_caseta_connection_err) => {
+                break Err(anyhow!("there was an issue with the caseta connection {:?} ", other_caseta_connection_err))
+            }
         }
     }
 }
