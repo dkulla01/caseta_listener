@@ -1,19 +1,15 @@
-use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::future::Future;
 use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use bytes::BytesMut;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
-use tokio::select;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
-use tracing::instrument;
+use tracing::{error, instrument, trace, warn};
 
 use crate::caseta::message::Message;
 
@@ -86,7 +82,7 @@ impl Debug for CasetaConnection<'_> {
 
 impl <'a>  CasetaConnection<'a> {
     pub fn new(tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
-        let (disconnect_sender, mut disconnect_receiver) = mpsc::channel(64);
+        let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
         CasetaConnection {
             tcp_socket_provider,
             stream: Option::None,
@@ -96,6 +92,7 @@ impl <'a>  CasetaConnection<'a> {
         }
     }
 
+    #[instrument]
     async fn read_frame(&mut self) -> Result<Option<Message>, CasetaConnectionError> {
         let stream = match self.stream {
             Some(ref mut buf_writer) => buf_writer,
@@ -124,7 +121,11 @@ impl <'a>  CasetaConnection<'a> {
             disconnect_command = disconnect_recv_future => {
                 match disconnect_command {
                     Some(DisconnectCommand{cause, message}) => {
-                        println!("encountered an error communicating with the caseta hub: {}", message);
+                        error!(
+                            cause=%cause,
+                            message=message.as_str(),
+                            "encountered an error communicating with the caseta hub"
+                        );
                         Err(cause)
                     }
                     _ => Err(CasetaConnectionError::Unknown("there was an issue waiting on the the disconnect channel".into()))
@@ -141,38 +142,38 @@ impl <'a>  CasetaConnection<'a> {
 
         let contents = self.read_frame().await;
         match contents {
-            Ok(Some(Message::LoginPrompt)) => tracing::trace!("received the login prompt"),
+            Ok(Some(Message::LoginPrompt)) => trace!("received the login prompt"),
             Ok(Some(unexpected_message)) => {
-                tracing::error!("got a weird random message: {:?}", unexpected_message);
+                error!("got a weird random message: {:?}", unexpected_message);
                 return Err(CasetaConnectionError::Initialization)
             }
             Ok(None) => {
-                tracing::error!("got an empty message");
+                error!("got an empty message");
                 return Err(CasetaConnectionError::Initialization);
             }
             Err(e) => {
-                tracing::error!("got an error: {:?}", e);
+                error!("got an error: {:?}", e);
             }
         }
         self.write("lutron\r\n").await?;
         let contents = self.read_frame().await;
         match contents {
-            Ok(Some(Message::PasswordPrompt)) => tracing::trace!("got password prompt"),
+            Ok(Some(Message::PasswordPrompt)) => trace!("got password prompt"),
             Ok(Some(unexpected_message)) => {
-                tracing::error!("got a weird random message: {:?}", unexpected_message);
+                error!("got a weird random message: {:?}", unexpected_message);
                 return Err(CasetaConnectionError::Authentication);
             }
             Ok(None) => {
-                tracing::error!("got an empty message");
+                error!("got an empty message");
                 return Err(CasetaConnectionError::Authentication);
             }
             Err(e) => {
-                tracing::error!("got an error: {:?}", e);
+                error!("got an error: {:?}", e);
             }
         }
         if let Ok(()) = self.write("integration\r\n").await {
         } else {
-            println!("got an error logging in");
+            error!("got an error logging in");
             return Err(CasetaConnectionError::Authentication)
         }
 
@@ -185,19 +186,20 @@ impl <'a>  CasetaConnection<'a> {
                 return Ok(());
             },
             Ok(Some(other_message)) => {
-                println!("expected GNET> message, but got {}", other_message);
+                error!(received_message=%other_message, "expected GNET> message, but got {}", other_message);
                 Err(CasetaConnectionError::Authentication)
             }
             _ => Err(CasetaConnectionError::Authentication)
         }
     }
 
+    #[instrument(level = "debug")]
     async fn write_keep_alive_message(&mut self) -> Result<(), CasetaConnectionError> {
         let write_result = self.write("\r\n").await;
         match write_result {
             Ok(_) => Ok(()),
             Err(e) => {
-                // println!("there was an issue writing the keepalive message: {}", e);
+                warn!(error=%e, "unable to write the keepalive message. was the caseta connection closed?");
                 self.disconnect_sender.send(
                     DisconnectCommand{
                         message: "there was a problem writing the keepalive message".into(),
@@ -218,6 +220,7 @@ impl <'a>  CasetaConnection<'a> {
             Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
             Err(e) => {
                 // print the error
+                error!(error=%e, "unable to initialize the caseta connection. is the address legit?");
                 return Err(CasetaConnectionError::BadAddress);
             }
         }
@@ -233,13 +236,17 @@ impl <'a>  CasetaConnection<'a> {
                 Err(CasetaConnectionError::Disconnected)
             }
             Err(CasetaConnectionError::KeepAlive) => {
-                println!("there was an issue writing the keepalive message...");
+                warn!("there was an issue writing the keepalive message...");
                 Err(CasetaConnectionError::Disconnected)
             }
             Err(CasetaConnectionError::EmptyMessage) => {
+                warn!("got an empty message from the socket. Is the caseta connection disconnected?")
                 Err(CasetaConnectionError::Disconnected)
             }
-            Err(err) => Err(err)
+            Err(err) => {
+                error!(error=%err);
+                Err(err)
+            }
         }
     }
 
@@ -253,14 +260,17 @@ impl <'a>  CasetaConnection<'a> {
 
         match outcome {
             Ok(_) => {},
-            Err(e) => return Err(CasetaConnectionError::ReadWriteIo(e))
+            Err(e) => {
+                error!(error=%e, "couldn't flush the socket read/write buffer");
+                return Err(CasetaConnectionError::ReadWriteIo(e))
+            }
         }
 
         let outcome = stream.flush().await;
         match outcome {
             Ok(_) => Ok(()),
             Err(e) => {
-                println!("couldn't flush the buffer");
+                error!(error=%e, "couldn't flush the socket read/write buffer");
                 Err(CasetaConnectionError::ReadWriteIo(e))
             }
         }

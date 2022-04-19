@@ -10,7 +10,7 @@ use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{EnvFilter, Registry};
 use tracing_subscriber::layer::SubscriberExt;
-use tracing::{debug, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider};
 use caseta_listener::caseta::Message::ButtonEvent;
@@ -74,7 +74,11 @@ async fn main() -> Result<()> {
         .with(formatting_layer);
 
     set_global_default(subscriber).expect("Failed to set subscriber");
+    watch_caseta_events().await
+}
 
+#[instrument]
+async fn watch_caseta_events() -> Result<()> {
     let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
     let port = 23;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
@@ -88,6 +92,13 @@ async fn main() -> Result<()> {
         match contents {
             Ok(ButtonEvent { remote_id, button_id, button_action }) => {
                 let button_key = format!("{}-{}", remote_id, button_id);
+                debug!(
+                    remote_id=%remote_id,
+                    button_id=%button_id,
+                    button_action=%button_action,
+                    button_key=button_key.as_str(),
+                    "Observed a button event"
+                );
                 match button_watchers.entry(button_key) {
                     Entry::Occupied(mut entry) => {
                         let button_watcher = entry.get();
@@ -116,13 +127,14 @@ async fn main() -> Result<()> {
                     }
                 }
             },
-            Ok(unexpected_contents) => println!("got an unexpected message type: {}", unexpected_contents),
+            Ok(unexpected_contents) => warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents),
             Err(CasetaConnectionError::Disconnected) => {
-                println!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
+                info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
                 connection = CasetaConnection::new(&tcp_socket_provider);
                 connection.initialize().await?;
             }
             Err(other_caseta_connection_err) => {
+                error!(caseta_connection_error=%other_caseta_connection_err, "there was a problem with the caseta connection");
                 break Err(anyhow!("there was an issue with the caseta connection {:?} ", other_caseta_connection_err))
             }
         }
