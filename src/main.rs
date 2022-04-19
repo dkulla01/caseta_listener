@@ -10,6 +10,7 @@ use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{EnvFilter, Registry};
 use tracing_subscriber::layer::SubscriberExt;
+use tracing::{debug, info, instrument};
 
 use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider};
 use caseta_listener::caseta::Message::ButtonEvent;
@@ -17,6 +18,7 @@ use caseta_listener::caseta::{CasetaConnection, CasetaConnectionError};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
+#[derive(Debug)]
 struct ButtonWatcher {
     button_history: Arc<Mutex<ButtonHistory>>,
     remote_id: u8,
@@ -32,7 +34,7 @@ impl ButtonWatcher {
         }
     }
 }
-
+#[derive(Debug)]
 struct ButtonHistory {
     press_count: u8,
     release_count: u8,
@@ -127,10 +129,12 @@ async fn main() -> Result<()> {
     }
 }
 
+
+#[instrument(skip(watcher), fields(remote_id=watcher.remote_id, button_id=%watcher.button_id))]
 async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
     let button_id = &watcher.button_id;
     let remote_id = watcher.remote_id;
-    println!("tracking remote {}, button {}", remote_id, button_id);
+    debug!(remote_id=remote_id, button_id=%button_id, "started tracking a new remote");
     // sleep for a smidge, then check the button state
     sleep(DOUBLE_CLICK_WINDOW).await;
     {
@@ -138,19 +142,39 @@ async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
         let mut locked_history = first_history.lock().unwrap();
         let press_count = locked_history.press_count;
         let release_count = locked_history.release_count;
-
+        info!(
+            press_count=press_count,
+            release_count=release_count,
+            "first pass at evaluating button state"
+        );
         if press_count == 1 && release_count == 1 {
-            println!("a single press has finished");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a single press has finished."
+            );
             locked_history.finished = true;
             return;
         } else if press_count == 1 && release_count == 0 {
-            print!("a long press has been started...");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a long press has been started..."
+            );
             // send the "long_press_started" event
         } else if press_count >= 2 && release_count != press_count {
-            print!("a double press has started but not finished...");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a double press has been started but not finished..."
+            );
             // this is a no-op
         } else if press_count > 2 && release_count == press_count {
-            println!("a double press has finished");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a double press has been finished."
+            );
             // send the "double press" event
             locked_history.finished = true;
             return;
@@ -163,15 +187,35 @@ async fn button_watcher_loop(watcher: Arc<ButtonWatcher>) {
         let press_count = locked_history.press_count;
         let release_count = locked_history.release_count;
         if press_count == 1 && release_count == 0 {
-            println!("long press...");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "ongoing long press..."
+            );
+            // send long press is still going on event
         } else if press_count == 1 && release_count == 1 {
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a long press has finished!"
+            );
             println!("a long press has finished!");
+            // send long press is finished event
             locked_history.finished = true;
             return;
         } else if press_count >= 2 && press_count > release_count {
-            println!("double press...")
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "ongoing double press..."
+            );
         } else if press_count >= 2 && press_count == release_count {
-            println!("a double click has finished");
+            info!(
+                press_count=press_count,
+                release_count=release_count,
+                "a double press has finished!"
+            );
+            // send double press has finished event
             locked_history.finished = true;
             return
         } else {
