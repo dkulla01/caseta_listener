@@ -2,6 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::io;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use thiserror::Error;
@@ -12,6 +13,7 @@ use async_trait::async_trait;
 use tracing::{error, instrument, trace, warn};
 
 use crate::caseta::message::Message;
+use crate::configuration::CasetaHubSettings;
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {
@@ -30,6 +32,8 @@ pub enum CasetaConnectionError {
     Uninitialized,
     #[error("encountered a problem reading/writing messages with caseta")]
     ReadWriteIo(#[from] io::Error),
+    #[error("timed out connecting to the caseta hub")]
+    ConnectTimeout,
     #[error("encountered a problem writing the keepalive message")]
     KeepAlive,
     #[error("Encountered an unknown error: {0}")]
@@ -45,7 +49,7 @@ struct DisconnectCommand {
 
 #[async_trait]
 pub trait TcpSocketProvider {
-    async fn new_socket(&self) -> io::Result<TcpStream>;
+    async fn new_socket(&self) -> Result<TcpStream, CasetaConnectionError>;
 }
 
 pub struct DefaultTcpSocketProvider {
@@ -61,13 +65,21 @@ impl DefaultTcpSocketProvider {
 
 #[async_trait]
 impl TcpSocketProvider for DefaultTcpSocketProvider {
-    async fn new_socket(&self) -> io::Result<TcpStream> {
-        Ok(TcpStream::connect((self.address, self.port)).await?)
+    async fn new_socket(&self) -> Result<TcpStream, CasetaConnectionError> {
+        let connection = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((self.address, self.port)))
+            .await;
+
+        match connection {
+            Ok(Ok(tcp_stream)) => Ok(tcp_stream),
+            Ok(Err(e)) => Err(CasetaConnectionError::ReadWriteIo(e)),
+            Err(_elapsed) => Err(CasetaConnectionError::ConnectTimeout)
+        }
     }
 }
 
 pub struct CasetaConnection<'a> {
     tcp_socket_provider: &'a (dyn TcpSocketProvider + 'a),
+    caseta_hub_settings: CasetaHubSettings,
     stream: Option<BufWriter<TcpStream>>,
     logged_in: bool,
     disconnect_sender: mpsc::Sender<DisconnectCommand>,
@@ -81,10 +93,11 @@ impl Debug for CasetaConnection<'_> {
 }
 
 impl <'a>  CasetaConnection<'a> {
-    pub fn new(tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
+    pub fn new(caseta_hub_settings: CasetaHubSettings, tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
         let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
         CasetaConnection {
             tcp_socket_provider,
+            caseta_hub_settings,
             stream: Option::None,
             logged_in: false,
             disconnect_sender,
@@ -155,7 +168,7 @@ impl <'a>  CasetaConnection<'a> {
                 error!("got an error: {:?}", e);
             }
         }
-        self.write("lutron\r\n").await?;
+        self.write(format!("{}\r\n", self.caseta_hub_settings.caseta_username).as_str()).await?;
         let contents = self.read_frame().await;
         match contents {
             Ok(Some(Message::PasswordPrompt)) => trace!("got password prompt"),
@@ -171,7 +184,7 @@ impl <'a>  CasetaConnection<'a> {
                 error!("got an error: {:?}", e);
             }
         }
-        if let Ok(()) = self.write("integration\r\n").await {
+        if let Ok(()) = self.write(format!("{}\r\n", self.caseta_hub_settings.caseta_password).as_str()).await {
         } else {
             error!("got an error logging in");
             return Err(CasetaConnectionError::Authentication)
@@ -240,7 +253,7 @@ impl <'a>  CasetaConnection<'a> {
                 Err(CasetaConnectionError::Disconnected)
             }
             Err(CasetaConnectionError::EmptyMessage) => {
-                warn!("got an empty message from the socket. Is the caseta connection disconnected?")
+                warn!("got an empty message from the socket. Is the caseta connection disconnected?");
                 Err(CasetaConnectionError::Disconnected)
             }
             Err(err) => {

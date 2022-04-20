@@ -1,6 +1,5 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +14,7 @@ use tracing::{debug, error, info, instrument, warn};
 use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider};
 use caseta_listener::caseta::Message::ButtonEvent;
 use caseta_listener::caseta::{CasetaConnection, CasetaConnectionError};
+use caseta_listener::configuration::get_caseta_hub_settings;
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
@@ -79,10 +79,12 @@ async fn main() -> Result<()> {
 
 #[instrument]
 async fn watch_caseta_events() -> Result<()> {
-    let caseta_address = IpAddr::V4("192.168.86.144".parse()?);
-    let port = 23;
+    let caseta_hub_settings = get_caseta_hub_settings().unwrap();
+
+    let caseta_address = caseta_hub_settings.caseta_host;
+    let port = caseta_hub_settings.caseta_port;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
-    let mut connection = CasetaConnection::new(&tcp_socket_provider);
+    let mut connection = CasetaConnection::new(caseta_hub_settings, &tcp_socket_provider);
     connection.initialize()
         .await?;
 
@@ -130,7 +132,7 @@ async fn watch_caseta_events() -> Result<()> {
             Ok(unexpected_contents) => warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents),
             Err(CasetaConnectionError::Disconnected) => {
                 info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
-                connection = CasetaConnection::new(&tcp_socket_provider);
+                connection = CasetaConnection::new(get_caseta_hub_settings().unwrap(), &tcp_socket_provider);
                 connection.initialize().await?;
             }
             Err(other_caseta_connection_err) => {
