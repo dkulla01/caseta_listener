@@ -1,5 +1,4 @@
 use std::net::IpAddr;
-use config::ConfigError;
 
 #[derive(serde::Deserialize)]
 pub struct CasetaHubSettings {

@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use anyhow::anyhow;
 
 pub type RemoteId = u8;
@@ -50,13 +50,19 @@ impl Display for Message {
         }
     }
 }
-#[derive(enum_display_derive::Display, Debug)]
+#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
 pub enum ButtonId {
     PowerOn,
     Up,
     Favorite,
     Down,
     PowerOff
+}
+
+impl Display for ButtonId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl TryFrom<u8> for ButtonId {
@@ -74,10 +80,16 @@ impl TryFrom<u8> for ButtonId {
     }
 }
 
-#[derive(enum_display_derive::Display, Debug)]
+#[derive(Debug)]
 pub enum ButtonAction {
     Press,
     Release
+}
+
+impl Display for ButtonAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl TryFrom<u8> for ButtonAction {
