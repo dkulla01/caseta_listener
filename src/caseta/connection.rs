@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
-use tracing::{error, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::caseta::message::Message;
 use crate::configuration::CasetaHubSettings;
@@ -105,7 +105,7 @@ impl <'a>  CasetaConnection<'a> {
         }
     }
 
-    #[instrument]
+    #[instrument(level = "trace")]
     async fn read_frame(&mut self) -> Result<Option<Message>, CasetaConnectionError> {
         let stream = match self.stream {
             Some(ref mut buf_writer) => buf_writer,
@@ -129,6 +129,7 @@ impl <'a>  CasetaConnection<'a> {
                 }
                 let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
                 let message = Message::from_str(contents).expect(format!("expected a valid message but got {}", contents).as_str());
+                debug!("got remote message {}", message);
                 return Ok(Some(message))
             }
             disconnect_command = disconnect_recv_future => {

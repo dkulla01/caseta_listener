@@ -46,7 +46,7 @@ impl Display for Message {
             Message::LoginPrompt => write!(f, "LoginPrompt"),
             Message::PasswordPrompt => write!(f, "PasswordPrompt"),
             Message::LoggedIn => write!(f, "LoggedIn"),
-            Message::ButtonEvent{remote_id, button_id, button_action} => write!(f, "ButtonDown, remote_id: {}, button_id: {}, button_action: {}", remote_id, button_id, button_action)
+            Message::ButtonEvent{remote_id, button_id, button_action} => write!(f, "ButtonAction remote_id: {}, button_id: {}, button_action: {}", remote_id, button_id, button_action)
         }
     }
 }

@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use itertools::Itertools;
 use tokio::time::sleep;
 use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
@@ -19,8 +18,8 @@ use caseta_listener::caseta::{ButtonAction, ButtonId, DefaultTcpSocketProvider, 
 use caseta_listener::caseta::Message::ButtonEvent;
 use caseta_listener::caseta::{CasetaConnection, CasetaConnectionError};
 use caseta_listener::configuration::get_caseta_hub_settings;
-const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
-const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(100);
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(100);
+const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 struct RemoteWatcher {
@@ -51,6 +50,18 @@ impl RemoteHistory {
         }
     }
 
+
+    //todo: this has to be a little smarter, because the caseta remotes misbehave
+    // when you're holding down a button, pressing and releasing a different button on
+    // the same remote causes the remote to send a signal for the held down button instead of the
+    // just pressed button
+    // e.g.
+    // press the (and hold) power on button -> caseta reports REMOTE X, BUTTON_ID: PowerOn, BUTTON_ACTION: Press
+    // press the power off button           -> caseta doesn't see this signal
+    // release the power off button         -> caseta reports REMOTE X, BUTTON_ID: PowerOn, BUTTON_ACTION: Press
+    // release the power on button          -> caseta reports REMOTE X, BUTTON_ID: PowerOn, BUTTON_ACTION: Release
+    // instead of incrementing press and release counts, I want this to walk through the transitions in the button
+    // behavior state machine
     fn increment(&mut self, button_id: ButtonId, button_action: &ButtonAction) -> () {
         match self.button_history.entry(button_id) {
             Entry::Vacant(entry) => {
@@ -59,7 +70,8 @@ impl RemoteHistory {
                     return ();
                 }
 
-                let button_history = ButtonHistory::new();
+                let mut button_history = ButtonHistory::new();
+                button_history.increment(button_action);
                 entry.insert(button_history);
             },
             Entry::Occupied(mut entry) => {
@@ -130,7 +142,7 @@ impl Display for ButtonState {
 }
 
 type ButtonWatcherDb = HashMap<String, Arc<ButtonWatcher>>;
-type RemoteWatcherDb = HashMap<RemoteId, RemoteWatcher>;
+type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
 
 #[derive(Debug)]
@@ -198,13 +210,14 @@ async fn watch_caseta_events() -> Result<()> {
         let contents = connection.await_message().await;
         match contents {
             Ok(ButtonEvent { remote_id, button_id, button_action }) => {
-                let button_key = format!("{}-{}", remote_id, button_id);
+                let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
                 debug!(
                     remote_id=%remote_id,
                     button_id=%button_id,
                     button_action=%button_action,
                     button_key=button_key.as_str(),
-                    "Observed a button event"
+                    "Observed a button event: {}",
+                    button_key
                 );
 
                 match remote_watchers.entry(remote_id) {
@@ -213,10 +226,10 @@ async fn watch_caseta_events() -> Result<()> {
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
                         if remote_history.is_finished() {
-                            let remote_watcher = RemoteWatcher::new(remote_id);
+                            let remote_watcher = Arc::new(RemoteWatcher::new(remote_id));
                             remote_watcher.remote_history.lock().unwrap().increment(button_id, &button_action);
-                            entry.insert(remote_watcher);
-                            // spawn the loop
+                            entry.insert(remote_watcher.clone());
+                            tokio::spawn(remote_watcher_loop(remote_watcher));
                         } else {
                             remote_history.increment(button_id, &button_action)
                         }
@@ -225,40 +238,42 @@ async fn watch_caseta_events() -> Result<()> {
                         if let ButtonAction::Release = button_action {
                             continue
                         }
-                        let remote_watcher = RemoteWatcher::new(remote_id);
+                        let remote_watcher = Arc::new(RemoteWatcher::new(remote_id));
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
-                        remote_history.increment(button_id, &button_action)
+                        remote_history.increment(button_id, &button_action);
+                        entry.insert(remote_watcher.clone());
+                        tokio::spawn(remote_watcher_loop(remote_watcher));
                     }
                 }
 
-                match button_watchers.entry(button_key) {
-                    Entry::Occupied(mut entry) => {
-                        let button_watcher = entry.get();
-                        let history = button_watcher.button_history.clone();
-                        let mut history =  history.lock().unwrap();
-                        if history.finished {
-                            let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id.clone()));
-                            button_watcher.button_history.lock().unwrap().increment(&button_action);
-                            entry.insert(button_watcher.clone());
-                            tokio::spawn(button_watcher_loop(button_watcher));
-                        } else {
-                            history.increment(&button_action)
-                        }
-                    },
-                    Entry::Vacant(entry) => {
-
-                        match button_action {
-                            ButtonAction::Release => {}, // no-op for an errant release
-                            ButtonAction::Press => {
-                                let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id));
-                                button_watcher.button_history.lock().unwrap().increment(&button_action);
-                                entry.insert(button_watcher.clone());
-                                tokio::spawn(button_watcher_loop(button_watcher));
-                            }
-                        }
-                    }
-                }
+                // match button_watchers.entry(button_key) {
+                //     Entry::Occupied(mut entry) => {
+                //         let button_watcher = entry.get();
+                //         let history = button_watcher.button_history.clone();
+                //         let mut history =  history.lock().unwrap();
+                //         if history.finished {
+                //             let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id.clone()));
+                //             button_watcher.button_history.lock().unwrap().increment(&button_action);
+                //             entry.insert(button_watcher.clone());
+                //             tokio::spawn(button_watcher_loop(button_watcher));
+                //         } else {
+                //             history.increment(&button_action)
+                //         }
+                //     },
+                //     Entry::Vacant(entry) => {
+                //
+                //         match button_action {
+                //             ButtonAction::Release => {}, // no-op for an errant release
+                //             ButtonAction::Press => {
+                //                 let button_watcher = Arc::new(ButtonWatcher::new(remote_id, button_id));
+                //                 button_watcher.button_history.lock().unwrap().increment(&button_action);
+                //                 entry.insert(button_watcher.clone());
+                //                 tokio::spawn(button_watcher_loop(button_watcher));
+                //             }
+                //         }
+                //     }
+                // }
             },
             Ok(unexpected_contents) => warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents),
             Err(CasetaConnectionError::Disconnected) => {
@@ -284,14 +299,14 @@ async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
         let history = watcher.remote_history.clone();
         let mut locked_history = history.lock().unwrap();
         let button_state_by_button_id = get_button_state_by_button_id(locked_history.borrow());
-        debug!(button_state_by_button_id=%button_state_by_button_id);
+        debug!(button_state_by_button_id=%button_state_by_button_id, "first pass at evaluating button state");
 
         for (button_id, button_state) in button_state_by_button_id.iter() {
             debug!(remote_id=remote_id, button_id=%button_id, button_state=%button_state);
             match button_state {
                 ButtonState::FirstPressAwaitingRelease => {
                  // perform the long press started action here
-                    debug!(remote_id=remote_id, button_id=%button_id, "a long press has started");
+                    debug!(remote_id=remote_id, button_id=%button_id, "a long press has started but not finished");
                 }
                 ButtonState::FirstPressAndFirstRelease => {
                     // perform the single press action
@@ -355,16 +370,12 @@ async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
     }
 }
 
+#[instrument(level = "trace")]
 fn get_button_state_by_button_id(remote_history: &RemoteHistory) -> RemoteState {
     let mut button_state_by_button_id: RemoteState = RemoteState::new();
     for (button_id, button_history) in remote_history.button_history.iter() {
         let press_count = button_history.press_count;
         let release_count = button_history.release_count;
-        trace!(
-            press_count=press_count,
-            release_count=release_count,
-            "first pass at evaluating button state"
-        );
         if press_count == 1 && release_count == 1 {
             debug!(
                 press_count=press_count,
