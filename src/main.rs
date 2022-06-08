@@ -28,9 +28,9 @@ struct RemoteWatcher {
 }
 
 impl RemoteWatcher {
-    fn new(remote_id: u8) -> RemoteWatcher {
+    fn new(remote_id: u8, button_id: ButtonId) -> RemoteWatcher {
         RemoteWatcher {
-            remote_history: Arc::new(Mutex::new(RemoteHistory::new())),
+            remote_history: Arc::new(Mutex::new(RemoteicHistory::new(button_id))),
             remote_id
         }
     }
@@ -38,20 +38,22 @@ impl RemoteWatcher {
 
 #[derive(Debug)]
 struct RemoteHistory {
-    button_history: HashMap<ButtonId, ButtonHistory>,
+    button_id: ButtonId,
+    button_state: Option<ButtonState>, // todo: should this be an option? should there be an "unpressed" button state?
     finished: bool
 }
 
 impl RemoteHistory {
-    fn new() -> RemoteHistory {
+    fn new(button_id: ButtonId) -> RemoteHistory {
         RemoteHistory {
-            button_history: HashMap::new(),
+            button_id,
+            button_state: Option::None,
             finished: false
         }
     }
 
 
-    //todo: this has to be a little smarter, because the caseta remotes misbehave
+    //todo: this has to be smarter than simply counting presses and releases, because the caseta remotes misbehave
     // when you're holding down a button, pressing and releasing a different button on
     // the same remote causes the remote to send a signal for the held down button instead of the
     // just pressed button
@@ -62,27 +64,51 @@ impl RemoteHistory {
     // release the power on button          -> caseta reports REMOTE X, BUTTON_ID: PowerOn, BUTTON_ACTION: Release
     // instead of incrementing press and release counts, I want this to walk through the transitions in the button
     // behavior state machine
+    #[instrument]
     fn increment(&mut self, button_id: ButtonId, button_action: &ButtonAction) -> () {
-        match self.button_history.entry(button_id) {
-            Entry::Vacant(entry) => {
-                // no-op for stray releases on uninitialized buttons
-                if let ButtonAction::Release = button_action {
-                    return ();
+        if button_id != self.button_id {
+            return;
+        }
+        if self.button_state.is_none() {
+            match button_action {
+                ButtonAction::Press => self.button_state = Option::Some(ButtonState::FirstPressAwaitingRelease),
+                ButtonAction::Release => {
+                    // no-op for releases on the first button action
                 }
-
-                let mut button_history = ButtonHistory::new();
-                button_history.increment(button_action);
-                entry.insert(button_history);
-            },
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().increment(&button_action)
             }
+            return
+        }
 
+        let current_button_state = self.button_state.unwrap();
+        match (current_button_state, button_action) {
+            (ButtonState::FirstPressAwaitingRelease, ButtonAction::Release) |
+            (ButtonState::FirstPressAndFirstRelease, ButtonAction::Press) |
+            (ButtonState::SecondPressAwaitingRelease, ButtonAction::Release)  => {
+                let next_button_state = current_button_state.next_button_state();
+                debug!(
+                    current_button_state=%current_button_state,
+                    button_action=%button_action,
+                    "transitioning from {} to {} because of button {}",
+                    current_button_state,
+                    next_button_state,
+                    button_action
+                );
+                self.button_state = Option::Some(next_button_state)
+            }
+            (_ignored_button_state, _ignored_action) => {
+                debug!(
+                    current_button_state=%_ignored_button_state,
+                    button_action=%_ignored_action,
+                    "no-op here, because the current button state is {}, but we saw a button {}",
+                    _ignored_button_state,
+                    _ignored_action
+                );
+            }
         }
     }
 
     fn is_finished(&self) -> bool {
-        self.finished || self.button_history.iter().any(|(_button_id, button_history)| button_history.finished)
+        self.finished
     }
 }
 
@@ -138,6 +164,18 @@ pub enum ButtonState {
 impl Display for ButtonState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl ButtonState {
+    fn next_button_state(&self) -> ButtonState {
+        match self {
+            ButtonState::FirstPressAwaitingRelease => ButtonState::FirstPressAndFirstRelease,
+            ButtonState::FirstPressAndFirstRelease => ButtonState::SecondPressAwaitingRelease,
+            ButtonState::SecondPressAwaitingRelease => ButtonState::SecondPressAndSecondRelease,
+            // for many consecutive rapid presses, we'll just treat them as a single "double press"
+            ButtonState::SecondPressAndSecondRelease => ButtonState::SecondPressAndSecondRelease
+        }
     }
 }
 
