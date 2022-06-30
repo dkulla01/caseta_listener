@@ -1,17 +1,28 @@
+use std::env;
+use std::fs::File;
+use config::{Config, ConfigError};
 use crate::config::caseta_remote::RemoteId;
 
 use serde_derive::Deserialize;
 use uuid::Uuid;
 
+const SCENE_CONFIGURATION_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_SCENE_CONFIG_FILE";
+const DEFAULT_SCENE_CONFIGURATION_FILE_NAME: &str = "caseta_listener_scenes.yaml";
+
 #[derive(Deserialize, Debug)]
-struct Room {
+pub struct HomeConfiguration {
+    rooms: Vec<Room>
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Room {
     name: String,
     scenes: Vec<Scene>,
     remotes: Vec<RemoteId>,
 }
 
 #[derive(Deserialize, Debug)]
-struct Scene {
+pub struct Scene {
     name: String,
     devices: Vec<Device>,
 }
@@ -23,6 +34,15 @@ enum Device {
     NanoleafLightPanels {name: String, on: bool, effect: String},
     WemoOutlet {name: String, on: bool}
 }
+pub fn get_room_configurations() -> Result<HomeConfiguration, ConfigError> {
+    let configuration_file_name = match env::var(SCENE_CONFIGURATION_FILE_NAME_ENV_VAR) {
+        Ok(filename) => filename,
+        _ => String::from(DEFAULT_SCENE_CONFIGURATION_FILE_NAME)
+    };
+    let home_configuration_builder = Config::builder()
+        .add_source(config::File::with_name(configuration_file_name.as_str()));
+    home_configuration_builder.build().unwrap().try_deserialize()
+}
 
 #[cfg(test)]
 mod tests {
@@ -33,6 +53,8 @@ mod tests {
     fn it_deserializes() {
         let living_room_configuration = r#"
             name: "Living Room"
+            room_id: 0c329b86-a7fb-4765-8fdd-2e87f37da685
+            grouped_light_room_id: ba8c44e4-0229-4888-8eeb-ce4a3d48cca8
             remotes: [2, 3]
             scenes:
             - devices:

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::caseta::message::Message;
-use crate::config::caseta_hub_configuration::CasetaHubSettings;
+use crate::config::auth_configuration::AuthConfiguration;
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {
@@ -79,7 +79,7 @@ impl TcpSocketProvider for DefaultTcpSocketProvider {
 
 pub struct CasetaConnection<'a> {
     tcp_socket_provider: &'a (dyn TcpSocketProvider + 'a),
-    caseta_hub_settings: CasetaHubSettings,
+    caseta_hub_settings: AuthConfiguration,
     stream: Option<BufWriter<TcpStream>>,
     logged_in: bool,
     disconnect_sender: mpsc::Sender<DisconnectCommand>,
@@ -93,7 +93,7 @@ impl Debug for CasetaConnection<'_> {
 }
 
 impl <'a>  CasetaConnection<'a> {
-    pub fn new(caseta_hub_settings: CasetaHubSettings, tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
+    pub fn new(caseta_hub_settings: AuthConfiguration, tcp_socket_provider: &'a dyn TcpSocketProvider) -> CasetaConnection<'a> {
         let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
         CasetaConnection {
             tcp_socket_provider,

@@ -1,6 +1,11 @@
+use std::env;
 use std::fmt::{Display, Formatter};
 use anyhow::anyhow;
 use serde_derive::Deserialize;
+
+const CASETA_REMOTE_CONFIG_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_REMOTE_CONFIG_FILE";
+const DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME: &str = "caseta_remote_configuration.yaml";
+
 pub type RemoteId = u8;
 
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
@@ -64,8 +69,21 @@ enum CasetaRemote {
 }
 
 #[derive(Deserialize, Debug)]
-struct RemoteConfiguration {
+pub struct RemoteConfiguration {
     remotes: Vec<CasetaRemote>
+}
+
+pub fn get_caseta_remote_configuration() -> Result<RemoteConfiguration, config::ConfigError> {
+    let configuration_file_name = match env::var(CASETA_REMOTE_CONFIG_FILE_NAME_ENV_VAR) {
+        Ok(filename) => filename,
+        _ => String::from(DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME)
+    };
+    
+    let mut settings = config::Config::builder()
+        .add_source(config::File::with_name(configuration_file_name.as_str()))
+        .add_source(config::Environment::with_prefix("CASETA_LISTENER"));
+
+    settings.build().unwrap().try_deserialize()
 }
 
 #[cfg(test)]

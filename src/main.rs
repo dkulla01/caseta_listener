@@ -12,8 +12,9 @@ use tracing::{debug, error, info, instrument, warn};
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::caseta::connection::{CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider};
 use caseta_listener::caseta::message::Message;
-use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId};
-use caseta_listener::config::caseta_hub_configuration::get_caseta_hub_settings;
+use caseta_listener::config::scene::get_room_configurations;
+use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId, get_caseta_remote_configuration};
+use caseta_listener::config::auth_configuration::get_auth_configuration;
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
 #[tokio::main]
@@ -36,7 +37,9 @@ async fn main() -> Result<()> {
 
 #[instrument]
 async fn watch_caseta_events() -> Result<()> {
-    let caseta_hub_settings = get_caseta_hub_settings().unwrap();
+    let caseta_hub_settings = get_auth_configuration().unwrap();
+    let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
+    let home_scene_configuration = get_room_configurations().unwrap();
 
     let caseta_address = caseta_hub_settings.caseta_host;
     let port = caseta_hub_settings.caseta_port;
@@ -91,7 +94,7 @@ async fn watch_caseta_events() -> Result<()> {
             Ok(unexpected_contents) => warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents),
             Err(CasetaConnectionError::Disconnected) => {
                 info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
-                connection = CasetaConnection::new(get_caseta_hub_settings().unwrap(), &tcp_socket_provider);
+                connection = CasetaConnection::new(get_auth_configuration().unwrap(), &tcp_socket_provider);
                 connection.initialize().await?;
             }
             Err(other_caseta_connection_err) => {
