@@ -1,9 +1,6 @@
-mod connection;
-mod message;
+pub mod connection;
+pub mod message;
 mod scene;
-mod remote;
+pub mod remote;
 
-pub use connection::*;
-pub use message::*;
 pub use scene::*;
-pub use remote::*;
