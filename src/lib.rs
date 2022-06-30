@@ -1,2 +1,2 @@
 pub mod caseta;
-pub mod configuration;
+pub mod config;

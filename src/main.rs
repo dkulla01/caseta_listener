@@ -11,9 +11,9 @@ use tracing::{debug, error, info, instrument, warn};
 
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::caseta::connection::{CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider};
-use caseta_listener::caseta::message::{ButtonAction, Message, RemoteId};
-use caseta_listener::configuration::get_caseta_hub_settings;
-
+use caseta_listener::caseta::message::Message;
+use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId};
+use caseta_listener::config::caseta_hub_configuration::get_caseta_hub_settings;
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
 #[tokio::main]

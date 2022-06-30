@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::caseta::message::Message;
-use crate::configuration::CasetaHubSettings;
+use crate::config::caseta_hub_configuration::CasetaHubSettings;
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {

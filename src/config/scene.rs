@@ -1,4 +1,4 @@
-use crate::caseta::message::RemoteId;
+use crate::config::caseta_remote::RemoteId;
 
 use serde_derive::Deserialize;
 use uuid::Uuid;
@@ -26,7 +26,7 @@ enum Device {
 
 #[cfg(test)]
 mod tests {
-    use crate::caseta::scene::*;
+    use crate::config::scene::*;
     use spectral::prelude::*;
 
     #[test]

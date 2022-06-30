@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, instrument, warn};
-use crate::caseta::message::{ButtonAction, ButtonId};
+use crate::config::caseta_remote::{ButtonAction, ButtonId};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);

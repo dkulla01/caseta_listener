@@ -1,8 +1,7 @@
 use std::str::FromStr;
 use std::fmt::{Debug, Display, Formatter};
 use anyhow::anyhow;
-
-pub type RemoteId = u8;
+use crate::config::caseta_remote::{ButtonAction, ButtonId, RemoteId};
 
 #[derive(Debug)]
 pub enum Message {
@@ -47,58 +46,6 @@ impl Display for Message {
             Message::PasswordPrompt => write!(f, "PasswordPrompt"),
             Message::LoggedIn => write!(f, "LoggedIn"),
             Message::ButtonEvent{remote_id, button_id, button_action} => write!(f, "ButtonAction remote_id: {}, button_id: {}, button_action: {}", remote_id, button_id, button_action)
-        }
-    }
-}
-#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
-pub enum ButtonId {
-    PowerOn,
-    Up,
-    Favorite,
-    Down,
-    PowerOff
-}
-
-impl Display for ButtonId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl TryFrom<u8> for ButtonId {
-    type Error = anyhow::Error;
-
-    fn try_from(id: u8) -> Result<Self, anyhow::Error> {
-        match id {
-            2 => Ok(ButtonId::PowerOn),
-            5 => Ok(ButtonId::Up),
-            3 => Ok(ButtonId::Favorite),
-            6 => Ok(ButtonId::Down),
-            4 => Ok(ButtonId::PowerOff),
-            _ => Err(anyhow!("{} is not a valid button id", id))
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ButtonAction {
-    Press,
-    Release
-}
-
-impl Display for ButtonAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl TryFrom<u8> for ButtonAction {
-    type Error = anyhow::Error;
-    fn try_from(id: u8) -> Result<Self, Self::Error> {
-        match id {
-            3 => Ok(ButtonAction::Press),
-            4 => Ok(ButtonAction::Release),
-            _ => Err(anyhow!("{} is not a valid button action", id))
         }
     }
 }
