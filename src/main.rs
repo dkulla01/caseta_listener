@@ -12,10 +12,12 @@ use tracing::{debug, error, info, instrument, warn};
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::caseta::connection::{CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider};
 use caseta_listener::caseta::message::Message;
-use caseta_listener::config::scene::get_room_configurations;
-use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId, get_caseta_remote_configuration};
+use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room};
+use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId, get_caseta_remote_configuration, RemoteConfiguration, CasetaRemote};
 use caseta_listener::config::auth_configuration::get_auth_configuration;
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
+
+type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,6 +42,7 @@ async fn watch_caseta_events() -> Result<()> {
     let caseta_hub_settings = get_auth_configuration().unwrap();
     let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
     let home_scene_configuration = get_room_configurations().unwrap();
+    let topology = build_topology(caseta_remote_configuration, home_scene_configuration);
 
     let caseta_address = caseta_hub_settings.caseta_host;
     let port = caseta_hub_settings.caseta_port;
@@ -55,13 +58,16 @@ async fn watch_caseta_events() -> Result<()> {
         match contents {
             Ok(Message::ButtonEvent { remote_id, button_id, button_action }) => {
                 let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
+                let (remote, room) = topology.get(&remote_id)
+                    .expect(format!("there must be configuration for this remote {}", remote_id).as_str());
                 debug!(
                     remote_id=%remote_id,
                     button_id=%button_id,
                     button_action=%button_action,
                     button_key=button_key.as_str(),
-                    "Observed a button event: {}",
-                    button_key
+                    "Observed a button event: {}, room: {}",
+                    button_key,
+                    room.name
                 );
 
                 match remote_watchers.entry(remote_id) {
@@ -103,4 +109,29 @@ async fn watch_caseta_events() -> Result<()> {
             }
         }
     }
+}
+
+fn build_topology(caseta_remote_configuration: RemoteConfiguration, home_configuration: HomeConfiguration) -> Topology {
+    let mut remotes_by_remote_id: HashMap<RemoteId, CasetaRemote> = HashMap::new();
+    for remote in caseta_remote_configuration.remotes.iter() {
+        match remote {
+            CasetaRemote::TwoButtonPico{id, ..} => {
+                remotes_by_remote_id.insert(*id, remote.clone());
+            },
+            CasetaRemote::FiveButtonPico{id, ..} => {
+                remotes_by_remote_id.insert(*id, remote.clone());
+            }
+        }
+    }
+
+    let mut topology: Topology = HashMap::new();
+    for room in home_configuration.rooms.iter() {
+        for remote_id in room.remotes.iter() {
+            let remote = remotes_by_remote_id.get(&remote_id)
+                .expect(format!("no remote with id {} in our configuration", *remote_id).as_str());
+            topology.insert(*remote_id, (remote.clone(), room.clone()));
+        }
+    }
+
+    topology
 }

@@ -61,16 +61,16 @@ impl TryFrom<u8> for ButtonAction {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum CasetaRemote {
+pub enum CasetaRemote {
     TwoButtonPico {id: RemoteId, name: String},
     FiveButtonPico {id: RemoteId, name: String},
 }
 
 #[derive(Deserialize, Debug)]
 pub struct RemoteConfiguration {
-    remotes: Vec<CasetaRemote>
+    pub remotes: Vec<CasetaRemote>
 }
 
 pub fn get_caseta_remote_configuration() -> Result<RemoteConfiguration, config::ConfigError> {

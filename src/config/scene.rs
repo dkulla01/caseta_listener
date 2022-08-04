@@ -11,23 +11,23 @@ const DEFAULT_SCENE_CONFIGURATION_FILE_NAME: &str = "caseta_listener_scenes.yaml
 
 #[derive(Deserialize, Debug)]
 pub struct HomeConfiguration {
-    rooms: Vec<Room>
+    pub rooms: Vec<Room>
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Room {
-    name: String,
-    scenes: Vec<Scene>,
-    remotes: Vec<RemoteId>,
+    pub name: String,
+    pub scenes: Vec<Scene>,
+    pub remotes: Vec<RemoteId>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Scene {
     name: String,
     devices: Vec<Device>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Device {
     HueScene {id: Uuid, name: String},
