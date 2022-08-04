@@ -3,3 +3,4 @@ caseta_port: 23
 caseta_username:
 caseta_password:
 hue_application_key:
+hue_host:

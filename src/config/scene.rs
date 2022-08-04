@@ -17,6 +17,8 @@ pub struct HomeConfiguration {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Room {
     pub name: String,
+    pub room_id: uuid::Uuid,
+    pub grouped_light_room_id: uuid::Uuid,
     pub scenes: Vec<Scene>,
     pub remotes: Vec<RemoteId>,
 }
