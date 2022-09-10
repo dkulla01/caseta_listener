@@ -12,9 +12,12 @@ use tracing::{debug, error, info, instrument, warn};
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::caseta::connection::{CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider};
 use caseta_listener::caseta::message::Message;
+use caseta_listener::client::hue::HueClient;
 use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room};
 use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId, get_caseta_remote_configuration, RemoteConfiguration, CasetaRemote};
-use caseta_listener::config::auth_configuration::get_auth_configuration;
+use caseta_listener::config::caseta_auth_configuration::get_caseta_auth_configuration;
+use caseta_listener::config::hue_auth_configuration::get_hue_auth_configuration;
+
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
 type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
@@ -39,12 +42,13 @@ async fn main() -> Result<()> {
 
 #[instrument]
 async fn watch_caseta_events() -> Result<()> {
-    let caseta_hub_settings = get_auth_configuration().unwrap();
+    let caseta_hub_settings = get_caseta_auth_configuration().unwrap();
     let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
     let home_scene_configuration = get_room_configurations().unwrap();
+    let hue_auth_configuration = get_hue_auth_configuration().unwrap();
     let topology = build_topology(caseta_remote_configuration, home_scene_configuration);
 
-    let caseta_address = caseta_hub_settings.caseta_host;
+    let caseta_address = caseta_hub_settings.caseta_host.clone();
     let port = caseta_hub_settings.caseta_port;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
     let mut connection = CasetaConnection::new(caseta_hub_settings, &tcp_socket_provider);
@@ -52,7 +56,7 @@ async fn watch_caseta_events() -> Result<()> {
         .await?;
 
     let mut remote_watchers : RemoteWatcherDb = HashMap::new();
-
+    let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key);
     loop {
         let contents = connection.await_message().await;
         match contents {
@@ -100,7 +104,7 @@ async fn watch_caseta_events() -> Result<()> {
             Ok(unexpected_contents) => warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents),
             Err(CasetaConnectionError::Disconnected) => {
                 info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
-                connection = CasetaConnection::new(get_auth_configuration().unwrap(), &tcp_socket_provider);
+                connection = CasetaConnection::new(get_caseta_auth_configuration().unwrap(), &tcp_socket_provider);
                 connection.initialize().await?;
             }
             Err(other_caseta_connection_err) => {
