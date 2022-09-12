@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{EnvFilter, Registry};
@@ -12,15 +13,14 @@ use tracing::{debug, error, info, instrument, warn};
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::caseta::connection::{CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider};
 use caseta_listener::caseta::message::Message;
+use caseta_listener::client::dispatcher::{DeviceActionDispatcher, DeviceActionMessage, dispatcher_loop};
 use caseta_listener::client::hue::HueClient;
-use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room};
+use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room, Topology};
 use caseta_listener::config::caseta_remote::{ButtonAction, RemoteId, get_caseta_remote_configuration, RemoteConfiguration, CasetaRemote};
 use caseta_listener::config::caseta_auth_configuration::get_caseta_auth_configuration;
 use caseta_listener::config::hue_auth_configuration::get_hue_auth_configuration;
 
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
-
-type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,7 +46,7 @@ async fn watch_caseta_events() -> Result<()> {
     let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
     let home_scene_configuration = get_room_configurations().unwrap();
     let hue_auth_configuration = get_hue_auth_configuration().unwrap();
-    let topology = build_topology(caseta_remote_configuration, home_scene_configuration);
+    let topology = Arc::new(build_topology(caseta_remote_configuration, home_scene_configuration));
 
     let caseta_address = caseta_hub_settings.caseta_host.clone();
     let port = caseta_hub_settings.caseta_port;
@@ -55,8 +55,11 @@ async fn watch_caseta_events() -> Result<()> {
     connection.initialize()
         .await?;
 
+    let (action_sender, mut action_receiver) = mpsc::channel(64);
     let mut remote_watchers : RemoteWatcherDb = HashMap::new();
     let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key);
+    let dispatcher = DeviceActionDispatcher::new(action_receiver, hue_client, topology.clone());
+    tokio::spawn(dispatcher_loop(dispatcher));
     loop {
         let contents = connection.await_message().await;
         match contents {
@@ -80,7 +83,7 @@ async fn watch_caseta_events() -> Result<()> {
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
                         if remote_history.is_finished() {
-                            let remote_watcher = Arc::new(RemoteWatcher::new(remote_id, button_id));
+                            let remote_watcher = Arc::new(RemoteWatcher::new(remote_id, button_id, action_sender.clone()));
                             remote_watcher.remote_history.lock().unwrap().increment(button_id, &button_action);
                             entry.insert(remote_watcher.clone());
                             tokio::spawn(remote_watcher_loop(remote_watcher));
@@ -92,7 +95,7 @@ async fn watch_caseta_events() -> Result<()> {
                         if let ButtonAction::Release = button_action {
                             continue
                         }
-                        let remote_watcher = Arc::new(RemoteWatcher::new(remote_id, button_id));
+                        let remote_watcher = Arc::new(RemoteWatcher::new(remote_id, button_id, action_sender.clone()));
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
                         remote_history.increment(button_id, &button_action);

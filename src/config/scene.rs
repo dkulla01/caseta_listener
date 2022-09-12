@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use config::{Config, ConfigError};
-use crate::config::caseta_remote::RemoteId;
+use crate::config::caseta_remote::{CasetaRemote, RemoteId};
 
 use serde_derive::Deserialize;
 use uuid::Uuid;
 
 const SCENE_CONFIGURATION_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_SCENE_CONFIG_FILE";
 const DEFAULT_SCENE_CONFIGURATION_FILE_NAME: &str = "caseta_listener_scenes.yaml";
+
+pub type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
 
 #[derive(Deserialize, Debug)]
 pub struct HomeConfiguration {

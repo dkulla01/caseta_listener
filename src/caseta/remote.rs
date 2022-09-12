@@ -1,9 +1,13 @@
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, instrument, warn};
+use crate::client::dispatcher::{DeviceAction, DeviceActionMessage};
+use crate::client::hue::HueClient;
 use crate::config::caseta_remote::{ButtonAction, ButtonId};
+use crate::config::scene::Room;
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
@@ -20,15 +24,17 @@ const REMOTE_WATCHER_LOOP_MAXIMUM_DURATION: Duration = Duration::from_secs(5);
 pub struct RemoteWatcher {
     pub remote_history: Arc<Mutex<RemoteHistory>>,
     pub remote_id: u8,
-    pub button_id: ButtonId
+    pub button_id: ButtonId,
+    pub action_sender: mpsc::Sender<DeviceActionMessage>
 }
 
 impl RemoteWatcher {
-    pub fn new(remote_id: u8, button_id: ButtonId) -> RemoteWatcher {
+    pub fn new(remote_id: u8, button_id: ButtonId, action_sender: mpsc::Sender<DeviceActionMessage>) -> RemoteWatcher {
         RemoteWatcher {
             remote_history: Arc::new(Mutex::new(RemoteHistory::new(button_id))),
             remote_id,
-            button_id
+            button_id,
+            action_sender
         }
     }
 }
@@ -115,7 +121,7 @@ impl RemoteHistory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum ButtonState {
     FirstPressAwaitingRelease,
     FirstPressAndFirstRelease,
@@ -148,12 +154,12 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
     let button_id = watcher.button_id;
     debug!(remote_id=remote_id, "started tracking remote");
     sleep(DOUBLE_CLICK_WINDOW).await;
-
+    let mut device_action_message = Option::None;
+    let mut finished = false;
     {
         let history = watcher.remote_history.clone();
         let mut locked_history = history.lock().unwrap();
         let button_state = &locked_history.button_state;
-
         debug!(remote_id=remote_id, button_id=%button_id, "first pass at evaluating button state");
         if button_state.is_some() {
             let button_state = button_state.as_ref().unwrap();
@@ -164,6 +170,7 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
                 }
                 ButtonState::FirstPressAndFirstRelease => {
                     // perform the single press action
+                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::SinglePressComplete, remote_id, button_id));
                     debug!(remote_id=remote_id, button_id=%button_id, button_state=%button_state, "a single press has finished");
                     locked_history.finished = true;
                 }
@@ -175,45 +182,68 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
                 ButtonState::SecondPressAndSecondRelease => {
                     //perform the double press action
                     debug!(remote_id=remote_id, button_id=%button_id, button_state=%button_state, "a double press has finished");
+                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::DoublePressComplete, remote_id, button_id));
                     locked_history.finished = true;
                 }
             }
         } else {
-            warn!(remote_id=remote_id, button_id=%button_id, "there was no initial button state for this button, which is unusual to say the least")
+            warn!(remote_id=remote_id, button_id=%button_id, "there was no initial button state for this button, which is unusual to say the least");
             // todo: should this be an exceptional condition that short-circuits?
         }
-        if locked_history.is_finished() {
-            return;
+        finished = locked_history.is_finished();
+    }
+
+    match device_action_message {
+        Some(message) => {
+            watcher.action_sender.send(message).await.unwrap();
         }
+        None => {}
+    }
+
+    if finished {
+        return;
     }
 
     loop {
         sleep(REMOTE_WATCHER_LOOP_SLEEP_DURATION).await;
         let history = watcher.remote_history.clone();
-        let mut locked_history = history.lock().unwrap();
-        let button_state = locked_history.button_state.as_ref().expect("button state should have been set by now.");
-        match button_state {
-            ButtonState::FirstPressAndFirstRelease => {
-                // a long press has finished here;
-                locked_history.finished = true;
-                debug!(remote_id=%remote_id, button_id=%button_id, "a long press has just finished")
+        {
+            let mut locked_history = history.lock().unwrap();
+            let button_state = locked_history.button_state.as_ref().expect("button state should have been set by now.");
+            match button_state {
+                ButtonState::FirstPressAndFirstRelease => {
+                    // a long press has finished here;
+                    locked_history.finished = true;
+                    debug!(remote_id=%remote_id, button_id=%button_id, "a long press has just finished");
+                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::LongPressComplete, remote_id, button_id));
+                }
+                ButtonState::FirstPressAwaitingRelease => {
+                    // a long press is still ongoing here. continue onward
+                    debug!(remote_id=%remote_id, button_id=%button_id, "a long press is still ongoing here");
+                    // there might be action depending on the button. E.G. do we increase/decrease the lights?
+                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::LongPressOngoing, remote_id, button_id));
+                }
+                ButtonState::SecondPressAwaitingRelease => {
+                    // a double press is still ongoing here. we're just waiting for the release, so nothing to see here.
+                }
+                ButtonState::SecondPressAndSecondRelease => {
+                    // a double press has finished here!
+                    locked_history.finished = true;
+                    debug!(remote_id=%remote_id, button_id=%button_id, "a double press has just finished");
+                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::DoublePressComplete, remote_id, button_id));
+                }
             }
-            ButtonState::FirstPressAwaitingRelease => {
-                // a long press is still ongoing here. continue onward
-                debug!(remote_id=%remote_id, button_id=%button_id, "a long press is still ongoing here");
-                // there might be action depending on the button. E.G. do we increase/decrease the lights?
-            }
-            ButtonState::SecondPressAwaitingRelease => {
-                // a double press is still ongoing here. we're just waiting for the release, so nothing to see here.
-            }
-            ButtonState::SecondPressAndSecondRelease => {
-                // a double press has finished here!
-                locked_history.finished = true;
-                debug!(remote_id=%remote_id, button_id=%button_id, "a double press has just finished")
-            }
+            finished = locked_history.is_finished();
         }
-        if locked_history.is_finished() {
-            return
+
+        match device_action_message {
+            Some(message) => {
+                watcher.action_sender.send(message).await.unwrap();
+            },
+            None => {}
+        }
+        if finished {
+            return;
         }
     }
 }
