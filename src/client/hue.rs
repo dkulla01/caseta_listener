@@ -9,6 +9,8 @@ use uuid::Uuid;
 use crate::client::model::hue::LightGroup;
 use crate::config::scene::Room;
 
+use super::model::hue::HueLightResponse;
+
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 
 #[derive(Debug)]
@@ -53,5 +55,16 @@ impl HueClient {
         // let content = response.text().await.unwrap();
         response.json::<LightGroup>()
             .await.map_err(|e| anyhow!(e))
+    }
+
+    #[instrument]
+    pub async fn get_lights(&self) -> anyhow::Result<HueLightResponse> {
+        let url = self.base_url.join("light").expect("msg");
+        let response = self.http_client.get(url).send()
+            .await.unwrap();
+        let result = response.text()
+            .await.unwrap();
+        serde_json::from_str(&result).map_err(|err| anyhow!(err))
+        // result.map_err(|e| anyhow!(e))
     }
 }

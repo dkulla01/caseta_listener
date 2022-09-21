@@ -33,7 +33,7 @@ impl DeviceActionMessage {
 
 pub struct DeviceActionDispatcher {
     message_receiver: Receiver<DeviceActionMessage>,
-    hue_client: HueClient,
+hue_client: HueClient,
     topology: Arc<Topology>
 
 }
@@ -52,7 +52,9 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) {
 
         match message.device_action {
             DeviceAction::SinglePressComplete => {
-                let content = dispatcher.hue_client.get_room_status(room.grouped_light_room_id).await.unwrap();
+                // let content = dispatcher.hue_client.get_room_status(room.grouped_light_room_id).await.unwrap();
+                // debug!(content=?content, "got some content from the hue api");
+                let content = dispatcher.hue_client.get_lights().await.unwrap();
                 debug!(content=?content, "got some content from the hue api");
             },
             _ => {}

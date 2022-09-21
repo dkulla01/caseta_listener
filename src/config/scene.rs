@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs::File;
 use config::{Config, ConfigError};
 use crate::config::caseta_remote::{CasetaRemote, RemoteId};
+use crate::client::model::hue::Color;
 
 use serde_derive::Deserialize;
 use uuid::Uuid;
@@ -35,7 +35,7 @@ pub struct Scene {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Device {
-    HueScene {id: Uuid, name: String},
+    HueScene {id: Uuid, name: String, devices: Vec<HueDevice>},
     NanoleafLightPanels {name: String, on: bool, effect: String},
     WemoOutlet {name: String, on: bool}
 }
@@ -47,6 +47,13 @@ pub fn get_room_configurations() -> Result<HomeConfiguration, ConfigError> {
     let home_configuration_builder = Config::builder()
         .add_source(config::File::with_name(configuration_file_name.as_str()));
     home_configuration_builder.build().unwrap().try_deserialize()
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case", rename = "device")]
+enum HueDevice {
+    HueWhiteAndColorAmbiance {id: Uuid, on: bool, color: Option<Color>},
+    HueWhiteBulb
 }
 
 #[cfg(test)]
@@ -66,6 +73,23 @@ mod tests {
               - id: a3011bb2-dd50-4fd9-b143-7ea03f367088
                 name: warm_reading_light_scene_0
                 type: hue_scene
+                devices:
+                - color:
+                    xy:
+                      x: 0.2895
+                      y: 0.3049
+                  color_capable: true
+                  id: a3011bb2-dd50-4fd9-b143-7ea03f367088
+                  'on': true
+                  type: hue_white_and_color_ambiance
+                - color:
+                    xy:
+                      x: 0.2689
+                      y: 0.29
+                  color_capable: true
+                  id: 6702934f-a255-4f2f-9f6c-e2d830237b6a
+                  'on': true
+                  type: hue_white_and_color_ambiance
               - name: Fireplace
                 'on': true
                 type: wemo_outlet

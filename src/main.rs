@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use moka::future::Cache;
 use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
@@ -57,6 +58,7 @@ async fn watch_caseta_events() -> Result<()> {
 
     let (action_sender, mut action_receiver) = mpsc::channel(64);
     let mut remote_watchers : RemoteWatcherDb = HashMap::new();
+    // let hue_state_of_the_world_cache = Cache::builder();
     let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key);
     let dispatcher = DeviceActionDispatcher::new(action_receiver, hue_client, topology.clone());
     tokio::spawn(dispatcher_loop(dispatcher));
