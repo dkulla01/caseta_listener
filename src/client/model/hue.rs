@@ -2,12 +2,12 @@ use uuid::Uuid;
 
 use serde_derive::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct LightGroup {
     pub data: Vec<LightGroupData>
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupData {
     pub id: Uuid,
     pub on: LightGroupOn,
@@ -15,36 +15,27 @@ pub struct LightGroupData {
 
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupOn {
     pub on: bool
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupDimming {
     pub  brightness: f32
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct HueLightResponse {
-    data: Vec<HueLight>
+    pub data: Vec<HueLight>
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct HueLight {
     pub id: Uuid,
-    pub owner: Owner,
+    pub owner: HueReference,
     pub on: LightGroupOn,
     pub color: Option<Color>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Owner {
-    #[serde(rename = "rid")]
-    pub id: Uuid,
-
-    #[serde(rename = "rtype")]
-    pub owner_type: String
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -58,9 +49,57 @@ pub struct ColorCoordinates {
     y: f32
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct HueRoomResponse {
+    pub data: Vec<HueRoom>
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HueRoom {
+    pub id: Uuid,
+    pub children: Vec<HueReference>,
+    pub services: Vec<HueReference>,
+    pub metadata: HueRoomMetadata
+
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HueRoomMetadata {
+    pub name: String
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "rtype", content = "rid")]
+#[serde(rename_all = "snake_case")]
+pub enum HueReference {
+    Device(Uuid),
+    GroupedLight(Uuid)
+}
+
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use crate::client::model::hue::HueLightResponse;
+
+    use crate::client::model::hue::HueReference;
+
+    #[test]
+    fn it_deserializes_a_hue_reference() {
+        let reference_id = Uuid::new_v4();
+        let hue_reference_text = r#"{"rid": "RID", "rtype": "device"}"#;
+        let json = hue_reference_text.replace("RID", reference_id.to_string().as_str());
+
+        let deserialized_reference: HueReference = serde_json::from_str(&json)
+        .expect(format!("unable to deserialize {}", json).as_str());
+
+        match deserialized_reference {
+            HueReference::Device(id) => {
+                assert_eq!(id, reference_id)
+            },
+            _ => {panic!("unable to deserialize device")}
+        }
+    }
 
     #[test]
     fn it_deserializes_a_hue_light_response_body() {

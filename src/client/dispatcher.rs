@@ -54,7 +54,7 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) {
             DeviceAction::SinglePressComplete => {
                 // let content = dispatcher.hue_client.get_room_status(room.grouped_light_room_id).await.unwrap();
                 // debug!(content=?content, "got some content from the hue api");
-                let content = dispatcher.hue_client.get_lights().await.unwrap();
+                let content = dispatcher.hue_client.get_lights_in_room(room.room_id).await.unwrap();
                 debug!(content=?content, "got some content from the hue api");
             },
             _ => {}
