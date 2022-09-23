@@ -91,10 +91,10 @@ impl HueClient {
         let result = response.json::<HueLightResponse>()
             .await?;
         
-        let lights_by_device_id: HashMap<Uuid, HueLight> = HashMap::from_iter(
-            result.data.iter().map(|light|{
+        let mut lights_by_device_id: HashMap<Uuid, HueLight> = HashMap::from_iter(
+            result.data.into_iter().map(|light|{
                 if let HueReference::Device(id) = light.owner {
-                    return (id, light.clone());
+                    return (id, light);
                 } else {
                     panic!("all lights should be owned by a device")
                 }
@@ -106,7 +106,7 @@ impl HueClient {
         // I have: map<room_id, set<device_id>>
         // I have: map<device_id, hue_light>
         let rooms_and_their_devices: HashMap<Uuid, Vec<Uuid>> = HashMap::from_iter(
-            rooms.iter().map(|(id, room)| {
+            rooms.into_iter().map(|(id, room)| {
                 let device_ids = Vec::from_iter(room.children.iter().map(|child| {
                     if let HueReference::Device(id) = child {
                         return *id;
@@ -114,20 +114,22 @@ impl HueClient {
                     panic!("this shouldn't happen")
                 }));
 
-                (*id, device_ids)
+                (id, device_ids)
             })
          );
 
         let rooms_and_their_lights: HashMap<Uuid, Vec<HueLight>> = HashMap::from_iter(
-            rooms_and_their_devices.iter().map(|(room_id, device_ids)| {
-                let lights = Vec::from_iter(device_ids.iter().map(|device_id| lights_by_device_id.get(device_id).unwrap().clone()));
-                return (*room_id, lights);
+            rooms_and_their_devices.into_iter().map(|(room_id, device_ids)| {
+                let lights = Vec::from_iter(
+                    device_ids.iter()
+                        .map(|device_id| 
+                            lights_by_device_id.remove(&device_id).unwrap()
+                        )
+                    );
+                return (room_id, lights);
             })
         );
-        // for (room_id, lights) in &result.data.into_iter().group_by(|light| ) {
-        //     rooms_and_their_lights.insert(room_id, lights.collect_vec());
-        // }
-        // debug!("rooms and their lights: {:?}", rooms_and_their_lights);
+        
         Ok(rooms_and_their_lights)
     }
 
