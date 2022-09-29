@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use config::{Config, ConfigError};
 use crate::config::caseta_remote::{CasetaRemote, RemoteId};
@@ -11,7 +11,13 @@ const SCENE_CONFIGURATION_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_SCENE_CONFI
 const DEFAULT_SCENE_CONFIGURATION_FILE_NAME: &str = "caseta_listener_scenes.yaml";
 
 pub type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
+pub type CurrentSceneCache = HashMap<Uuid, Vec<Device>>;
+pub type HueDeviceSet = HashSet<HueDevice>;
 
+
+pub struct SceneCacheEntry {
+    pub room_id: Uuid
+}
 #[derive(Deserialize, Debug)]
 pub struct HomeConfiguration {
     pub rooms: Vec<Room>
@@ -20,22 +26,24 @@ pub struct HomeConfiguration {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Room {
     pub name: String,
-    pub room_id: uuid::Uuid,
-    pub grouped_light_room_id: uuid::Uuid,
+    pub room_id: Uuid,
+    pub grouped_light_room_id: Uuid,
     pub scenes: Vec<Scene>,
     pub remotes: Vec<RemoteId>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Scene {
+    // todo: need a way to convert this into a scene cache entry
+    // and I'm not totally sure what that will look like
     name: String,
     devices: Vec<Device>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum Device {
-    HueScene {id: Uuid, name: String, devices: Vec<HueDevice>},
+pub enum Device {
+    HueScene {id: Uuid, name: String, devices: HueDeviceSet},
     NanoleafLightPanels {name: String, on: bool, effect: String},
     WemoOutlet {name: String, on: bool}
 }
@@ -49,11 +57,11 @@ pub fn get_room_configurations() -> Result<HomeConfiguration, ConfigError> {
     home_configuration_builder.build().unwrap().try_deserialize()
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Hash, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", rename = "device")]
-enum HueDevice {
+pub enum HueDevice {
     HueWhiteAndColorAmbiance {id: Uuid, on: bool, color: Option<Color>},
-    HueWhiteBulb
+    HueWhiteBulb {id: Uuid, on: bool}
 }
 
 #[cfg(test)]

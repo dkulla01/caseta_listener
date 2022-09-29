@@ -38,15 +38,36 @@ pub struct HueLight {
     pub color: Option<Color>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub struct Color {
     xy: ColorCoordinates
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub struct ColorCoordinates {
-    x: f32,
-    y: f32
+
+    #[serde(deserialize_with = "crate::client::model::serde_util::deserialize_hue_float")]
+    x: HueFloat,
+    #[serde(deserialize_with = "crate::client::model::serde_util::deserialize_hue_float")]
+    y: HueFloat
+}
+
+#[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
+pub struct HueFloat {
+    integral: u8,
+    decimal: u32
+}
+
+impl HueFloat {
+    pub fn new(integral: u8, decimal: u32) -> HueFloat {
+        HueFloat { integral, decimal }
+    }
+}
+
+impl ToString for HueFloat {
+    fn to_string(&self) -> String {
+        format!("{}.{}", self.integral, self.decimal).to_string()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -84,6 +105,8 @@ mod tests {
 
     use crate::client::model::hue::HueReference;
 
+    use super::HueFloat;
+
     #[test]
     fn it_deserializes_a_hue_reference() {
         let reference_id = Uuid::new_v4();
@@ -103,6 +126,9 @@ mod tests {
 
     #[test]
     fn it_deserializes_a_hue_light_response_body() {
+        let light_color_x_value = HueFloat::new(2, 3456);
+        let light_color_y_value = HueFloat::new(1, 2);
+        
         let response_text = r#"
         {
             "errors": [],
@@ -137,8 +163,8 @@ mod tests {
                     "color_temperature_delta": {},
                     "color": {
                         "xy": {
-                            "x": 0.5529,
-                            "y": 0.2549
+                            "x": LIGHT_COLOR_X_VALUE,
+                            "y": LIGHT_COLOR_Y_VALUE
                         },
                         "gamut": {
                             "red": {
@@ -190,10 +216,16 @@ mod tests {
             ]
           }   
         "#;
-
-        let deserialized : HueLightResponse = serde_json::from_str(response_text)
+        let response_text = response_text.replace("LIGHT_COLOR_X_VALUE", light_color_x_value.to_string().as_str());
+        let response_text = response_text.replace("LIGHT_COLOR_Y_VALUE", light_color_y_value.to_string().as_str());
+        let deserialized : HueLightResponse = serde_json::from_str(response_text.as_str())
         .expect("unable to deserialize");
 
+        let hue_light = &deserialized.data[0];
+        let color = hue_light.color.as_ref().unwrap();
+
+        assert_eq!(color.xy.x, light_color_x_value);
+        assert_eq!(color.xy.y, light_color_y_value);
         assert!(matches!(deserialized.data.len(), 1))
     }
 }
