@@ -1,3 +1,4 @@
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use serde_derive::Deserialize;
@@ -45,29 +46,8 @@ pub struct Color {
 
 #[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub struct ColorCoordinates {
-
-    #[serde(deserialize_with = "crate::client::model::serde_util::deserialize_hue_float")]
-    x: HueFloat,
-    #[serde(deserialize_with = "crate::client::model::serde_util::deserialize_hue_float")]
-    y: HueFloat
-}
-
-#[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
-pub struct HueFloat {
-    integral: u8,
-    decimal: u32
-}
-
-impl HueFloat {
-    pub fn new(integral: u8, decimal: u32) -> HueFloat {
-        HueFloat { integral, decimal }
-    }
-}
-
-impl ToString for HueFloat {
-    fn to_string(&self) -> String {
-        format!("{}.{}", self.integral, self.decimal).to_string()
-    }
+    x: OrderedFloat<f32>,
+    y: OrderedFloat<f32>
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,13 +79,12 @@ pub enum HueReference {
 
 #[cfg(test)]
 mod tests {
+    use ordered_float::OrderedFloat;
     use uuid::Uuid;
 
     use crate::client::model::hue::HueLightResponse;
 
     use crate::client::model::hue::HueReference;
-
-    use super::HueFloat;
 
     #[test]
     fn it_deserializes_a_hue_reference() {
@@ -125,9 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn it_deserializes_a_hue_light_response_body() {
-        let light_color_x_value = HueFloat::new(2, 3456);
-        let light_color_y_value = HueFloat::new(1, 2);
+    fn it_deserializes_an_ordered_float_into_light_response_body() {
+        let light_color_x_value = OrderedFloat(2.34);
+        let light_color_y_value = OrderedFloat(1.2);
         
         let response_text = r#"
         {
