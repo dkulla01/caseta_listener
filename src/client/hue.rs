@@ -10,10 +10,8 @@ use tracing::{instrument, debug};
 use url::Host;
 
 use uuid::Uuid;
-use crate::client::model::hue::{LightGroup, HueReference};
+use crate::client::model::hue::{HueLight, HueResponse, HueRoom, HueReference, InternalHueDeviceKind, HueDeviceInternalRepresentation, HueDevice, HueDeviceKind};
 use crate::config::scene::Room;
-
-use super::model::hue::{HueLightResponse, HueLight, HueRoomResponse, HueRoom};
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 type RoomIdAndLights = HashMap<Uuid, Vec<HueLight>>;
@@ -50,7 +48,7 @@ impl HueClient {
     }
 
     #[instrument]
-    pub async fn get_room_status(&self, grouped_light_room_id: Uuid) -> anyhow::Result<LightGroup> {
+    pub async fn get_room_status(&self, grouped_light_room_id: Uuid) -> anyhow::Result<HueResponse<HueLight>> {
         let url = self.base_url.join(
             format!("grouped_light/{}", grouped_light_room_id).as_str()
         )
@@ -59,7 +57,7 @@ impl HueClient {
         let response = self.http_client.get(url).send()
             .await?;
         // let content = response.text().await.unwrap();
-        response.json::<LightGroup>()
+        response.json::<HueResponse<HueLight>>()
             .await.map_err(|e| anyhow!(e))
     }
 
@@ -88,7 +86,7 @@ impl HueClient {
         let url = self.base_url.join("light").expect("this should always be a well formed URL");
         let response = self.http_client.get(url).send()
             .await?;
-        let result = response.json::<HueLightResponse>()
+        let result = response.json::<HueResponse<HueLight>>()
             .await?;
         
         let mut lights_by_device_id: HashMap<Uuid, HueLight> = HashMap::from_iter(
@@ -138,9 +136,27 @@ impl HueClient {
         let response = self.http_client.get(url).send()
             .await.unwrap();
 
-        let rooms = response.json::<HueRoomResponse>().await?;
+        let rooms = response.json::<HueResponse<HueRoom>>().await?;
         let mut rooms_by_id: HashMap<Uuid, HueRoom> = HashMap::new();
-        rooms.data.iter().for_each(|room| { rooms_by_id.insert(room.id, room.clone()); });
+        rooms.data.into_iter().for_each(|room| { rooms_by_id.insert(room.id, room); });
         Ok(rooms_by_id)
+    }
+
+    pub async fn get_devices(&self) -> Result<HashMap<Uuid, HueDevice>> {
+        let url = self.base_url.join("device").expect("this should always be a well formed URL");
+        let response = self.http_client.get(url).send()
+            .await.unwrap();
+
+        let devices = response.json::<HueResponse<HueDeviceInternalRepresentation>>().await?;
+        let result = HashMap::from_iter(
+            devices.data.into_iter()
+                .map_into::<HueDevice>()
+                .filter(|device| device.kind != HueDeviceKind::NonLampDevice)
+                .map(|item| (item.id, item))
+        );
+
+    
+        Ok(result)
+        
     }
 }

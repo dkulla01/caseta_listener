@@ -2,37 +2,31 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use serde::{Deserializer, Deserialize};
+use serde::{Deserialize, Deserializer};
 use serde_with::DeserializeFromStr;
 use uuid::Uuid;
 
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct LightGroup {
-    pub data: Vec<LightGroupData>
+#[derive(Deserialize, Debug)]
+pub struct HueResponse<T, E = ()> {
+    pub data: Vec<T>,
+    pub errors: Vec<E>
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupData {
     pub id: Uuid,
     pub on: LightGroupOn,
-    pub dimming: LightGroupDimming
-
+    pub dimming: LightGroupDimming,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupOn {
-    pub on: bool
+    pub on: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LightGroupDimming {
-    pub  brightness: f32
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct HueLightResponse {
-    pub data: Vec<HueLight>
+    pub brightness: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -45,18 +39,13 @@ pub struct HueLight {
 
 #[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub struct Color {
-    xy: ColorCoordinates
+    xy: ColorCoordinates,
 }
 
 #[derive(Debug, Deserialize, Clone, Hash, PartialEq, Eq)]
 pub struct ColorCoordinates {
     x: OrderedFloat<f32>,
-    y: OrderedFloat<f32>
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct HueRoomResponse {
-    pub data: Vec<HueRoom>
+    y: OrderedFloat<f32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -64,14 +53,13 @@ pub struct HueRoom {
     pub id: Uuid,
     pub children: Vec<HueReference>,
     pub services: Vec<HueReference>,
-    pub metadata: HueObjectMetadata
-
+    pub metadata: HueObjectMetadata,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct HueObjectMetadata {
     pub name: String,
-    pub archtype: String
+    pub archtype: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -79,30 +67,66 @@ pub struct HueObjectMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum HueReference {
     Device(Uuid),
-    GroupedLight(Uuid)
+    GroupedLight(Uuid),
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct HueDeviceInternalRepresentation {
-    id: Uuid,
-    product_data: ProductDataInternalRepresentation,
-    metadata: HueObjectMetadata
-
+    pub id: Uuid,
+    pub product_data: ProductDataInternalRepresentation,
+    pub metadata: HueObjectMetadata,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProductDataInternalRepresentation {
-    product_name: HueDeviceKind
+    pub product_name: InternalHueDeviceKind,
 }
 
+#[derive(Debug)]
 pub struct HueDevice {
-    id: Uuid,
-    name: String,
-    kind: HueDeviceKind
+    pub id: Uuid,
+    pub name: String,
+    pub kind: HueDeviceKind,
+}
+
+impl From<HueDeviceInternalRepresentation> for HueDevice {
+    fn from(device: HueDeviceInternalRepresentation) -> Self {
+        Self {
+            id: device.id,
+            name: device.metadata.name,
+            kind: device.product_data.product_name.into(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum HueDeviceKind {
+    WhiteLamp,
+    WhiteAmbianceLamp,
+    ColorAndWhiteAmbianceLamp,
+    NonLampDevice,
+}
+
+impl From<InternalHueDeviceKind> for HueDeviceKind {
+    
+    fn from(internal_hue_device_kind: InternalHueDeviceKind) -> Self {
+        match internal_hue_device_kind {
+            InternalHueDeviceKind::ExtendedColorLight |
+            InternalHueDeviceKind::HueColorLamp |
+            InternalHueDeviceKind::HueColorCandle |
+            InternalHueDeviceKind::HueLightstripOutdoor |
+            InternalHueDeviceKind::HuePlay |
+            InternalHueDeviceKind::HueLightstripPlus => Self::ColorAndWhiteAmbianceLamp,
+            InternalHueDeviceKind::HueWhiteLamp => Self::ColorAndWhiteAmbianceLamp,
+            InternalHueDeviceKind::LutronAurora |
+            InternalHueDeviceKind::PhilipsHue |
+            InternalHueDeviceKind::HueDimmerSwitch => Self::NonLampDevice
+        }
+    }
 }
 
 #[derive(Debug, DeserializeFromStr, Clone)]
-pub enum HueDeviceKind {
+pub enum InternalHueDeviceKind {
     ExtendedColorLight,
     HueColorLamp,
     HueColorCandle,
@@ -115,32 +139,34 @@ pub enum HueDeviceKind {
     PhilipsHue,
 }
 
-impl FromStr for HueDeviceKind {
+impl FromStr for InternalHueDeviceKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let capitalized_camel_case = s.split(' ').map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str()
-            }
-        }).join("");
+        let capitalized_camel_case = s
+            .split(' ')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            })
+            .join("");
 
         match capitalized_camel_case.as_str() {
-            "ExtendedColorLight" => Ok(HueDeviceKind::ExtendedColorLight),
-            "HueColorLamp" => Ok(HueDeviceKind::HueColorLamp),
-            "HueColorCandle" => Ok(HueDeviceKind::HueColorCandle),
-            "HueDimmerSwitch" => Ok(HueDeviceKind::HueDimmerSwitch),
-            "HueLightstripOutdoor" => Ok(HueDeviceKind::HueLightstripOutdoor),
-            "HueLightstripPlus" => Ok(HueDeviceKind::HueLightstripPlus),
-            "HuePlay" => Ok(HueDeviceKind::HuePlay),
-            "HueWhiteLamp" => Ok(HueDeviceKind::HueWhiteLamp),
-            "LutronAurora" => Ok(HueDeviceKind::LutronAurora),
-            "PhilipsHue" => Ok(HueDeviceKind::PhilipsHue),
-            _ => Err("Unknown Kind".into())
+            "ExtendedColorLight" => Ok(InternalHueDeviceKind::ExtendedColorLight),
+            "HueColorLamp" => Ok(InternalHueDeviceKind::HueColorLamp),
+            "HueColorCandle" => Ok(InternalHueDeviceKind::HueColorCandle),
+            "HueDimmerSwitch" => Ok(InternalHueDeviceKind::HueDimmerSwitch),
+            "HueLightstripOutdoor" => Ok(InternalHueDeviceKind::HueLightstripOutdoor),
+            "HueLightstripPlus" => Ok(InternalHueDeviceKind::HueLightstripPlus),
+            "HuePlay" => Ok(InternalHueDeviceKind::HuePlay),
+            "HueWhiteLamp" => Ok(InternalHueDeviceKind::HueWhiteLamp),
+            "LutronAurora" => Ok(InternalHueDeviceKind::LutronAurora),
+            "PhilipsHue" => Ok(InternalHueDeviceKind::PhilipsHue),
+            _ => Err("Unknown Kind".into()),
         }
-
     }
 }
 
@@ -151,7 +177,9 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use crate::client::model::hue::{HueDeviceKind, HueLightResponse, HueReference, ProductDataInternalRepresentation};
+    use crate::client::model::hue::{
+        InternalHueDeviceKind, HueReference, ProductDataInternalRepresentation, HueResponse, HueLight,
+    };
 
     #[test]
     fn it_deserializes_a_hue_reference() {
@@ -159,14 +187,16 @@ mod tests {
         let hue_reference_text = r#"{"rid": "RID", "rtype": "device"}"#;
         let json = hue_reference_text.replace("RID", reference_id.to_string().as_str());
 
-        let deserialized_reference: HueReference = serde_json::from_str(&json)
-        .expect(format!("unable to deserialize {}", json).as_str());
+        let deserialized_reference: HueReference =
+            serde_json::from_str(&json).expect(format!("unable to deserialize {}", json).as_str());
 
         match deserialized_reference {
             HueReference::Device(id) => {
                 assert_eq!(id, reference_id)
-            },
-            _ => {panic!("unable to deserialize device")}
+            }
+            _ => {
+                panic!("unable to deserialize device")
+            }
         }
     }
 
@@ -174,7 +204,7 @@ mod tests {
     fn it_deserializes_an_ordered_float_into_light_response_body() {
         let light_color_x_value = OrderedFloat(2.34);
         let light_color_y_value = OrderedFloat(1.2);
-        
+
         let response_text = r#"
         {
             "errors": [],
@@ -262,10 +292,16 @@ mod tests {
             ]
           }   
         "#;
-        let response_text = response_text.replace("LIGHT_COLOR_X_VALUE", light_color_x_value.to_string().as_str());
-        let response_text = response_text.replace("LIGHT_COLOR_Y_VALUE", light_color_y_value.to_string().as_str());
-        let deserialized : HueLightResponse = serde_json::from_str(response_text.as_str())
-        .expect("unable to deserialize");
+        let response_text = response_text.replace(
+            "LIGHT_COLOR_X_VALUE",
+            light_color_x_value.to_string().as_str(),
+        );
+        let response_text = response_text.replace(
+            "LIGHT_COLOR_Y_VALUE",
+            light_color_y_value.to_string().as_str(),
+        );
+        let deserialized: HueResponse<HueLight> =
+            serde_json::from_str(response_text.as_str()).expect("unable to deserialize");
 
         let hue_light = &deserialized.data[0];
         let color = hue_light.color.as_ref().unwrap();
@@ -278,21 +314,26 @@ mod tests {
     #[test]
     fn it_deserializes_a_product_name() {
         let hue_color_lamp = "Hue Color Lamp";
-        let hue_device_json = json!({
-            "product_name": hue_color_lamp
-        });
+        let hue_device_json = json!({ "product_name": hue_color_lamp });
         let hue_device_string = hue_device_json.to_string();
-        
-        let hue_device: ProductDataInternalRepresentation = serde_json::from_str(hue_device_string.as_str()).unwrap();
-        assert!(matches!(hue_device.product_name, HueDeviceKind::HueColorLamp));
+
+        let hue_device: ProductDataInternalRepresentation =
+            serde_json::from_str(hue_device_string.as_str()).unwrap();
+        assert!(matches!(
+            hue_device.product_name,
+            InternalHueDeviceKind::HueColorLamp
+        ));
 
         let hue_color_lamp_with_alternative_capitalization = "Hue color lamp";
-        let hue_device_json = json!({
-            "product_name": hue_color_lamp_with_alternative_capitalization
-        });
+        let hue_device_json =
+            json!({ "product_name": hue_color_lamp_with_alternative_capitalization });
         let hue_device_string = hue_device_json.to_string();
-        
-        let hue_device: ProductDataInternalRepresentation = serde_json::from_str(hue_device_string.as_str()).unwrap();
-        assert!(matches!(hue_device.product_name, HueDeviceKind::HueColorLamp));
+
+        let hue_device: ProductDataInternalRepresentation =
+            serde_json::from_str(hue_device_string.as_str()).unwrap();
+        assert!(matches!(
+            hue_device.product_name,
+            InternalHueDeviceKind::HueColorLamp
+        ));
     }
 }
