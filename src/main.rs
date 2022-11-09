@@ -59,10 +59,7 @@ async fn watch_caseta_events() -> Result<()> {
 
     let (action_sender, mut action_receiver) = mpsc::channel(64);
     let mut remote_watchers : RemoteWatcherDb = HashMap::new();
-    let hue_state_of_the_world_cache = Cache::builder()
-        .time_to_live(Duration::from_secs(120))
-        .build();
-    let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key, hue_state_of_the_world_cache);
+    let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key);
     let dispatcher = DeviceActionDispatcher::new(action_receiver, hue_client, topology.clone());
     tokio::spawn(dispatcher_loop(dispatcher));
     loop {

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, instrument};
 use crate::client::hue::HueClient;
-use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
-use crate::config::scene::{Room, Topology};
+use crate::config::caseta_remote::{ButtonId, RemoteId};
+use crate::config::scene::Topology;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DeviceAction {
@@ -54,7 +54,7 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) {
             DeviceAction::SinglePressComplete => {
                 // let content = dispatcher.hue_client.get_room_status(room.grouped_light_room_id).await.unwrap();
                 // debug!(content=?content, "got some content from the hue api");
-                let content = dispatcher.hue_client.get_lights_in_room(room.room_id).await.unwrap();
+                let content = dispatcher.hue_client.get_grouped_light(room.grouped_light_room_id).await.unwrap();
                 debug!(content=?content, "got some content from the hue api");
             },
             _ => {}
