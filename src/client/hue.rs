@@ -1,12 +1,13 @@
 use std::collections::HashMap;
-use anyhow::{anyhow, Result, Ok};
+use anyhow::{anyhow, Result, Ok, bail};
+use log::error;
 use reqwest::{Client, Url};
 use reqwest::header::{HeaderMap, HeaderValue};
 use tracing::{instrument, debug};
 use url::Host;
 
 use uuid::Uuid;
-use crate::client::model::hue::{HueResponse, HueRoom};
+use crate::client::model::hue::{HueResponse, HueRoom, TurnLightGroupOnOrOff};
 
 use super::model::hue::GroupedLight;
 
@@ -65,4 +66,47 @@ impl HueClient {
         Ok(rooms_by_id)
     }
 
+    pub async fn turn_on(&self, grouped_light_room_id: Uuid) -> anyhow::Result<HueResponse<GroupedLight>>{
+        let url = self.base_url.join(
+            format!("grouped_light/{}", grouped_light_room_id).as_str()
+        ).expect("unable to parse grouped light url");
+        let response = self.http_client.put(url).json(&TurnLightGroupOnOrOff::ON).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = &response.text().await?;
+            error!("there was a problem turning on the grouped_light {}. code: {}, body: {}", grouped_light_room_id, status, response_body);
+            anyhow::bail!("there was a problem turning on the grouped light {}. code: {}, body: {}", grouped_light_room_id, status, response_body)
+        }
+        // now the light should be on, so let's get the state of the grouped_light
+        self.get_grouped_light(grouped_light_room_id).await
+    }
+
+    pub async fn turn_off(&self, grouped_light_room_id: Uuid) -> anyhow::Result<()> {
+        let url = self.base_url.join(
+            format!("grouped_light/{}", grouped_light_room_id).as_str()
+        ).expect("unable to build the request URI");
+
+        let response = self.http_client.put(url)
+            .json(&TurnLightGroupOnOrOff::OFF)
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().await?;
+            error!(
+                "there was a problem turning on the grouped light {}. status: {}, body: {}",
+                grouped_light_room_id,
+                status,
+                response_body
+            );
+            bail!(
+                "there was a problem turning on the grouped light {}. status: {}, body: {}",
+                grouped_light_room_id,
+                status,
+                response_body
+            )
+        }
+
+        Ok(())
+    }
 }

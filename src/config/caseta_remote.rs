@@ -79,7 +79,7 @@ pub fn get_caseta_remote_configuration() -> Result<RemoteConfiguration, config::
         _ => String::from(DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME)
     };
     
-    let mut settings = config::Config::builder()
+    let settings = config::Config::builder()
         .add_source(config::File::with_name(configuration_file_name.as_str()))
         .add_source(config::Environment::with_prefix("CASETA_LISTENER"));
 

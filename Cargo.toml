@@ -20,7 +20,7 @@ env_logger = "0.9.0"
 futures = "0.3.17"
 itertools = "0.10.5"
 log = "0.4.14"
-moka = { version = "0.9.4", features = ["future"] }
+mini-moka = "0.9.6"
 ordered-float = { version = "3.2.0", features = ["serde"] }
 reqwest = { version = "0.11.11", features = ["json"]}
 serde = "1.0.133"

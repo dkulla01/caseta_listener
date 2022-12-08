@@ -1,10 +1,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use moka::future::Cache;
+use caseta_listener::client::scene_state::new_cache;
 use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
@@ -60,7 +59,7 @@ async fn watch_caseta_events() -> Result<()> {
     let (action_sender, mut action_receiver) = mpsc::channel(64);
     let mut remote_watchers : RemoteWatcherDb = HashMap::new();
     let hue_client = HueClient::new(hue_auth_configuration.host, hue_auth_configuration.application_key);
-    let dispatcher = DeviceActionDispatcher::new(action_receiver, hue_client, topology.clone());
+    let dispatcher = DeviceActionDispatcher::new(action_receiver, hue_client, topology.clone(), Arc::new(new_cache()));
     tokio::spawn(dispatcher_loop(dispatcher));
     loop {
         let contents = connection.await_message().await;

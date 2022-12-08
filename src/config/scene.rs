@@ -10,12 +10,7 @@ const SCENE_CONFIGURATION_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_SCENE_CONFI
 const DEFAULT_SCENE_CONFIGURATION_FILE_NAME: &str = "caseta_listener_scenes.yaml";
 
 pub type Topology = HashMap<RemoteId, (CasetaRemote, Room)>;
-pub type CurrentSceneCache = HashMap<Uuid, Vec<Device>>;
 
-
-pub struct SceneCacheEntry {
-    pub room_id: Uuid
-}
 #[derive(Deserialize, Debug)]
 pub struct HomeConfiguration {
     pub rooms: Vec<Room>
@@ -32,10 +27,8 @@ pub struct Room {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Scene {
-    // todo: need a way to convert this into a scene cache entry
-    // and I'm not totally sure what that will look like
-    name: String,
-    devices: Vec<Device>,
+    pub name: String,
+    pub devices: Vec<Device>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize, Debug)]
@@ -15,9 +15,19 @@ pub struct GroupedLight {
     pub owner: HueReference 
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LightGroupOn {
     pub on: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct TurnLightGroupOnOrOff {
+    pub on: LightGroupOn
+}
+
+impl TurnLightGroupOnOrOff {
+    pub const ON: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff{on: LightGroupOn{on: true}};
+    pub const OFF: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff{on: LightGroupOn{on: false}};
 }
 
 #[derive(Deserialize, Debug, Clone)]
