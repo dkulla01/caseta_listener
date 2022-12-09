@@ -1,11 +1,12 @@
 use crate::client::hue::HueClient;
 use crate::client::scene_state::CurrentSceneEntry;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
-use crate::config::scene::{Scene, Topology};
+use crate::config::scene::{Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, instrument};
+use uuid::Uuid;
 
 use super::model::hue::{GroupedLight, HueResponse};
 use super::scene_state::CurrentSceneCache;
@@ -58,18 +59,8 @@ impl DeviceActionDispatcher {
         }
     }
 
-    async fn get_current_scene(&self, remote_id: &RemoteId) -> Result<CurrentSceneEntry> {
-        let (remote, room) = self
-            .topology
-            .get(remote_id)
-            .expect(format!("no configuration present for remote {}", remote_id).as_str());
-        match remote {
-            CasetaRemote::TwoButtonPico { .. } => {
-                bail!("we haven't implemented 2 button picos yet")
-            }
-            _ => (),
-        }
-        let cache_entry = self.current_scene_cache.clone().get(&room.room_id);
+    async fn get_current_scene(&self, room: &Room) -> Result<CurrentSceneEntry> {
+        let cache_entry = self.current_scene_cache.get(&room.room_id);
         return match cache_entry {
             Some(entry) => Ok(entry),
             None => {
@@ -88,6 +79,12 @@ impl DeviceActionDispatcher {
             }
         };
     }
+
+    fn cache_current_scene(&self, room_id: Uuid, current_scene_entry: CurrentSceneEntry) {
+        self.current_scene_cache
+            .insert(room_id, current_scene_entry)
+    }
+
     fn get_first_scene(&self, remote_id: &RemoteId) -> &Scene {
         let (_, room) = self
             .topology
@@ -115,7 +112,7 @@ impl DeviceActionDispatcher {
 
     async fn handle_power_on_button_press(&self, message: DeviceActionMessage) -> Result<()> {
         ensure!(message.button_id == ButtonId::PowerOn);
-        let topology = self.topology.clone();
+        let topology = &self.topology;
 
         let (remote, room) = topology
             .get(&message.remote_id)
@@ -127,7 +124,7 @@ impl DeviceActionDispatcher {
             _ => (),
         }
 
-        let current_scene = self.get_current_scene(&message.remote_id).await?;
+        let current_scene = self.get_current_scene(room).await?;
 
         match message.device_action {
             DeviceAction::SinglePressComplete => {
@@ -136,8 +133,7 @@ impl DeviceActionDispatcher {
                     let current_light_status =
                         self.hue_client.turn_on(room.grouped_light_room_id).await?;
                     let scene = self.get_first_scene(&message.remote_id);
-
-                    self.current_scene_cache.insert(
+                    self.cache_current_scene(
                         room.room_id,
                         Self::build_cache_entry(scene, &current_light_status),
                     )
@@ -159,6 +155,32 @@ impl DeviceActionDispatcher {
 
         Ok(())
     }
+
+    async fn handle_power_off_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        ensure!(message.button_id == ButtonId::PowerOff);
+        let topology = &self.topology;
+        let (remote, room) = topology
+            .get(&message.remote_id)
+            .expect(format!("no configuration present for remote {}", message.remote_id).as_str());
+        match remote {
+            CasetaRemote::TwoButtonPico { .. } => bail!("two button picos are not supported yet"),
+            _ => (),
+        }
+
+        let current_scene = self.get_current_scene(room).await?;
+        match message.device_action {
+            DeviceAction::SinglePressComplete
+            | DeviceAction::DoublePressComplete
+            | DeviceAction::LongPressComplete => {
+                self.hue_client.turn_off(room.grouped_light_room_id).await?;
+                let mut turned_off_scene = current_scene.clone();
+                turned_off_scene.on = false;
+                self.cache_current_scene(room.room_id, turned_off_scene);
+            }
+            DeviceAction::LongPressStart | DeviceAction::LongPressOngoing => (),
+        }
+        Ok(())
+    }
 }
 
 #[instrument(skip(dispatcher))]
@@ -171,7 +193,7 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) -> Result<(
             ButtonId::Up => todo!(),
             ButtonId::Favorite => todo!(),
             ButtonId::Down => todo!(),
-            ButtonId::PowerOff => todo!(),
+            ButtonId::PowerOff => dispatcher.handle_power_off_button_press(message).await?,
         }
 
         match message.device_action {
