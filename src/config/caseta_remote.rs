@@ -1,7 +1,7 @@
-use std::env;
-use std::fmt::{Display, Formatter};
 use anyhow::anyhow;
 use serde_derive::Deserialize;
+use std::env;
+use std::fmt::{Display, Formatter};
 
 const CASETA_REMOTE_CONFIG_FILE_NAME_ENV_VAR: &str = "CASETA_LISTENER_REMOTE_CONFIG_FILE";
 const DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME: &str = "caseta_remote_configuration.yaml";
@@ -14,7 +14,7 @@ pub enum ButtonId {
     Up,
     Favorite,
     Down,
-    PowerOff
+    PowerOff,
 }
 
 impl Display for ButtonId {
@@ -33,7 +33,7 @@ impl TryFrom<u8> for ButtonId {
             3 => Ok(ButtonId::Favorite),
             6 => Ok(ButtonId::Down),
             4 => Ok(ButtonId::PowerOff),
-            _ => Err(anyhow!("{} is not a valid button id", id))
+            _ => Err(anyhow!("{} is not a valid button id", id)),
         }
     }
 }
@@ -41,7 +41,7 @@ impl TryFrom<u8> for ButtonId {
 #[derive(Debug)]
 pub enum ButtonAction {
     Press,
-    Release
+    Release,
 }
 
 impl Display for ButtonAction {
@@ -56,7 +56,7 @@ impl TryFrom<u8> for ButtonAction {
         match id {
             3 => Ok(ButtonAction::Press),
             4 => Ok(ButtonAction::Release),
-            _ => Err(anyhow!("{} is not a valid button action", id))
+            _ => Err(anyhow!("{} is not a valid button action", id)),
         }
     }
 }
@@ -64,21 +64,21 @@ impl TryFrom<u8> for ButtonAction {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CasetaRemote {
-    TwoButtonPico {id: RemoteId, name: String},
-    FiveButtonPico {id: RemoteId, name: String},
+    TwoButtonPico { id: RemoteId, name: String },
+    FiveButtonPico { id: RemoteId, name: String },
 }
 
 #[derive(Deserialize, Debug)]
 pub struct RemoteConfiguration {
-    pub remotes: Vec<CasetaRemote>
+    pub remotes: Vec<CasetaRemote>,
 }
 
 pub fn get_caseta_remote_configuration() -> Result<RemoteConfiguration, config::ConfigError> {
     let configuration_file_name = match env::var(CASETA_REMOTE_CONFIG_FILE_NAME_ENV_VAR) {
         Ok(filename) => filename,
-        _ => String::from(DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME)
+        _ => String::from(DEFAULT_CASETA_REMOTE_CONFIGURATION_FILE_NAME),
     };
-    
+
     let settings = config::Config::builder()
         .add_source(config::File::with_name(configuration_file_name.as_str()))
         .add_source(config::Environment::with_prefix("CASETA_LISTENER"));
@@ -88,9 +88,9 @@ pub fn get_caseta_remote_configuration() -> Result<RemoteConfiguration, config::
 
 #[cfg(test)]
 mod tests {
+    use crate::config::caseta_remote::{CasetaRemote, RemoteConfiguration};
     use spectral::assert_that;
     use spectral::prelude::*;
-    use crate::config::caseta_remote::{CasetaRemote, RemoteConfiguration};
 
     #[test]
     fn it_deserializes_remote_configuration() {
@@ -104,11 +104,18 @@ mod tests {
               type: two_button_pico
         "#;
 
-        let remote_configuration: RemoteConfiguration = serde_yaml::from_str(remote_configuration_text)
-            .expect("unable to deserialize remote configuration");
+        let remote_configuration: RemoteConfiguration =
+            serde_yaml::from_str(remote_configuration_text)
+                .expect("unable to deserialize remote configuration");
 
         assert_that(&remote_configuration.remotes).has_length(2);
-        assert!(matches!(&remote_configuration.remotes[0], CasetaRemote::FiveButtonPico {..}));
-        assert!(matches!(&remote_configuration.remotes[1], CasetaRemote::TwoButtonPico {..}));
+        assert!(matches!(
+            &remote_configuration.remotes[0],
+            CasetaRemote::FiveButtonPico { .. }
+        ));
+        assert!(matches!(
+            &remote_configuration.remotes[1],
+            CasetaRemote::TwoButtonPico { .. }
+        ));
     }
 }

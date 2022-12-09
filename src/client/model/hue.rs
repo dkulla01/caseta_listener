@@ -4,7 +4,7 @@ use uuid::Uuid;
 #[derive(Deserialize, Debug)]
 pub struct HueResponse<T, E = ()> {
     pub data: Vec<T>,
-    pub errors: Vec<E>
+    pub errors: Vec<E>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -12,7 +12,7 @@ pub struct GroupedLight {
     pub id: Uuid,
     pub on: LightGroupOn,
     pub dimming: LightGroupDimming,
-    pub owner: HueReference 
+    pub owner: HueReference,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -22,12 +22,16 @@ pub struct LightGroupOn {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct TurnLightGroupOnOrOff {
-    pub on: LightGroupOn
+    pub on: LightGroupOn,
 }
 
 impl TurnLightGroupOnOrOff {
-    pub const ON: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff{on: LightGroupOn{on: true}};
-    pub const OFF: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff{on: LightGroupOn{on: false}};
+    pub const ON: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff {
+        on: LightGroupOn { on: true },
+    };
+    pub const OFF: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff {
+        on: LightGroupOn { on: false },
+    };
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -55,7 +59,7 @@ pub struct HueObjectMetadata {
 pub enum HueReference {
     Device(Uuid),
     GroupedLight(Uuid),
-    Room(Uuid)
+    Room(Uuid),
 }
 
 #[cfg(test)]

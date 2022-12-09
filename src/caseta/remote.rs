@@ -1,17 +1,16 @@
-use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::{Instant, sleep};
-use tracing::{debug, instrument, warn};
 use crate::client::dispatcher::{DeviceAction, DeviceActionMessage};
 use crate::client::hue::HueClient;
 use crate::config::caseta_remote::{ButtonAction, ButtonId};
 use crate::config::scene::Room;
+use std::fmt::{Display, Formatter};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::{sleep, Instant};
+use tracing::{debug, instrument, warn};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
-
 
 // note: it seems like caseta has some built in timeout for long presses.
 // when you press and hold the remote, it blinks once when you first press it, and then again after about 5 seconds
@@ -19,22 +18,25 @@ const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
 // so a 5 second hard timeout here is probably enough to capture the longest long presses
 const REMOTE_WATCHER_LOOP_MAXIMUM_DURATION: Duration = Duration::from_secs(5);
 
-
 #[derive(Debug)]
 pub struct RemoteWatcher {
     pub remote_history: Arc<Mutex<RemoteHistory>>,
     pub remote_id: u8,
     pub button_id: ButtonId,
-    pub action_sender: mpsc::Sender<DeviceActionMessage>
+    pub action_sender: mpsc::Sender<DeviceActionMessage>,
 }
 
 impl RemoteWatcher {
-    pub fn new(remote_id: u8, button_id: ButtonId, action_sender: mpsc::Sender<DeviceActionMessage>) -> RemoteWatcher {
+    pub fn new(
+        remote_id: u8,
+        button_id: ButtonId,
+        action_sender: mpsc::Sender<DeviceActionMessage>,
+    ) -> RemoteWatcher {
         RemoteWatcher {
             remote_history: Arc::new(Mutex::new(RemoteHistory::new(button_id))),
             remote_id,
             button_id,
-            action_sender
+            action_sender,
         }
     }
 }
@@ -44,7 +46,7 @@ pub struct RemoteHistory {
     button_id: ButtonId,
     pub button_state: Option<ButtonState>, // todo: should this be an option? should there be an "unpressed" button state?
     pub finished: bool,
-    tracking_started_at: Instant
+    tracking_started_at: Instant,
 }
 
 impl RemoteHistory {
@@ -53,10 +55,9 @@ impl RemoteHistory {
             button_id,
             button_state: Option::None,
             finished: false,
-            tracking_started_at: Instant::now()
+            tracking_started_at: Instant::now(),
         }
     }
-
 
     //todo: this has to be smarter than simply counting presses and releases, because the caseta remotes misbehave
     // when you're holding down a button, pressing and releasing a different button on
@@ -78,7 +79,7 @@ impl RemoteHistory {
             match button_action {
                 ButtonAction::Press => {
                     self.button_state = Option::Some(ButtonState::FirstPressAwaitingRelease);
-                },
+                }
                 ButtonAction::Release => {
                     // no-op for releases on the first button action
                 }
@@ -88,9 +89,9 @@ impl RemoteHistory {
 
         let current_button_state = self.button_state.as_ref().unwrap();
         match (current_button_state, button_action) {
-            (ButtonState::FirstPressAwaitingRelease, ButtonAction::Release) |
-            (ButtonState::FirstPressAndFirstRelease, ButtonAction::Press) |
-            (ButtonState::SecondPressAwaitingRelease, ButtonAction::Release)  => {
+            (ButtonState::FirstPressAwaitingRelease, ButtonAction::Release)
+            | (ButtonState::FirstPressAndFirstRelease, ButtonAction::Press)
+            | (ButtonState::SecondPressAwaitingRelease, ButtonAction::Release) => {
                 let next_button_state = current_button_state.next_button_state();
                 debug!(
                     current_button_state=%current_button_state,
@@ -126,7 +127,7 @@ pub enum ButtonState {
     FirstPressAwaitingRelease,
     FirstPressAndFirstRelease,
     SecondPressAwaitingRelease,
-    SecondPressAndSecondRelease
+    SecondPressAndSecondRelease,
 }
 
 impl Display for ButtonState {
@@ -142,17 +143,16 @@ impl ButtonState {
             ButtonState::FirstPressAndFirstRelease => ButtonState::SecondPressAwaitingRelease,
             ButtonState::SecondPressAwaitingRelease => ButtonState::SecondPressAndSecondRelease,
             // for many consecutive rapid presses, we'll just treat them as a single "double press"
-            ButtonState::SecondPressAndSecondRelease => ButtonState::SecondPressAndSecondRelease
+            ButtonState::SecondPressAndSecondRelease => ButtonState::SecondPressAndSecondRelease,
         }
     }
 }
-
 
 #[instrument(skip(watcher), fields(remote_id=watcher.remote_id))]
 pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
     let remote_id = watcher.remote_id;
     let button_id = watcher.button_id;
-    debug!(remote_id=remote_id, "started tracking remote");
+    debug!(remote_id = remote_id, "started tracking remote");
     sleep(DOUBLE_CLICK_WINDOW).await;
     let mut device_action_message = Option::None;
     let mut finished = false;
@@ -170,7 +170,11 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
                 }
                 ButtonState::FirstPressAndFirstRelease => {
                     // perform the single press action
-                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::SinglePressComplete, remote_id, button_id));
+                    device_action_message = Option::Some(DeviceActionMessage::new(
+                        DeviceAction::SinglePressComplete,
+                        remote_id,
+                        button_id,
+                    ));
                     debug!(remote_id=remote_id, button_id=%button_id, button_state=%button_state, "a single press has finished");
                     locked_history.finished = true;
                 }
@@ -182,7 +186,11 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
                 ButtonState::SecondPressAndSecondRelease => {
                     //perform the double press action
                     debug!(remote_id=remote_id, button_id=%button_id, button_state=%button_state, "a double press has finished");
-                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::DoublePressComplete, remote_id, button_id));
+                    device_action_message = Option::Some(DeviceActionMessage::new(
+                        DeviceAction::DoublePressComplete,
+                        remote_id,
+                        button_id,
+                    ));
                     locked_history.finished = true;
                 }
             }
@@ -209,19 +217,30 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
         let history = watcher.remote_history.clone();
         {
             let mut locked_history = history.lock().unwrap();
-            let button_state = locked_history.button_state.as_ref().expect("button state should have been set by now.");
+            let button_state = locked_history
+                .button_state
+                .as_ref()
+                .expect("button state should have been set by now.");
             match button_state {
                 ButtonState::FirstPressAndFirstRelease => {
                     // a long press has finished here;
                     locked_history.finished = true;
                     debug!(remote_id=%remote_id, button_id=%button_id, "a long press has just finished");
-                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::LongPressComplete, remote_id, button_id));
+                    device_action_message = Option::Some(DeviceActionMessage::new(
+                        DeviceAction::LongPressComplete,
+                        remote_id,
+                        button_id,
+                    ));
                 }
                 ButtonState::FirstPressAwaitingRelease => {
                     // a long press is still ongoing here. continue onward
                     debug!(remote_id=%remote_id, button_id=%button_id, "a long press is still ongoing here");
                     // there might be action depending on the button. E.G. do we increase/decrease the lights?
-                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::LongPressOngoing, remote_id, button_id));
+                    device_action_message = Option::Some(DeviceActionMessage::new(
+                        DeviceAction::LongPressOngoing,
+                        remote_id,
+                        button_id,
+                    ));
                 }
                 ButtonState::SecondPressAwaitingRelease => {
                     // a double press is still ongoing here. we're just waiting for the release, so nothing to see here.
@@ -230,7 +249,11 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
                     // a double press has finished here!
                     locked_history.finished = true;
                     debug!(remote_id=%remote_id, button_id=%button_id, "a double press has just finished");
-                    device_action_message = Option::Some(DeviceActionMessage::new(DeviceAction::DoublePressComplete, remote_id, button_id));
+                    device_action_message = Option::Some(DeviceActionMessage::new(
+                        DeviceAction::DoublePressComplete,
+                        remote_id,
+                        button_id,
+                    ));
                 }
             }
             finished = locked_history.is_finished();
@@ -239,7 +262,7 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
         match device_action_message {
             Some(message) => {
                 watcher.action_sender.send(message).await.unwrap();
-            },
+            }
             None => {}
         }
         if finished {
