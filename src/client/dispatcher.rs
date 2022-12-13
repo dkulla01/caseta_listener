@@ -130,8 +130,10 @@ impl DeviceActionDispatcher {
             DeviceAction::SinglePressComplete => {
                 debug!("got a single press for remote in room {}", room.name);
                 if !current_scene.on {
-                    let current_light_status =
-                        self.hue_client.turn_on(room.grouped_light_room_id).await?;
+                    let current_light_status = self
+                        .hue_client
+                        .turn_on(room.grouped_light_room_id, Option::None)
+                        .await?;
                     let scene = self.get_first_scene(&message.remote_id);
                     self.cache_current_scene(
                         room.room_id,

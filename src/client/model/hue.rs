@@ -1,4 +1,6 @@
+use config::builder;
 use serde::{Deserialize, Serialize};
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[derive(Deserialize, Debug)]
@@ -20,21 +22,33 @@ pub struct LightGroupOn {
     pub on: bool,
 }
 
-#[derive(Serialize, Debug, Clone)]
-pub struct TurnLightGroupOnOrOff {
-    pub on: LightGroupOn,
+impl LightGroupOn {
+    pub const ON: LightGroupOn = LightGroupOn { on: true };
+    pub const OFF: LightGroupOn = LightGroupOn { on: false };
 }
 
-impl TurnLightGroupOnOrOff {
-    pub const ON: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff {
-        on: LightGroupOn { on: true },
-    };
-    pub const OFF: TurnLightGroupOnOrOff = TurnLightGroupOnOrOff {
-        on: LightGroupOn { on: false },
-    };
+#[derive(TypedBuilder, Serialize, Debug)]
+pub struct GroupedLightPutBody {
+    on: LightGroupOn,
+    #[builder(default=None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimming: Option<LightGroupDimming>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallSceneAction {
+    Active,
+    Static,
+}
+
+#[derive(Serialize, Debug)]
+pub struct RecallSceneBody {
+    action: RecallSceneAction,
+    dimming: LightGroupDimming,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LightGroupDimming {
     pub brightness: f32,
 }

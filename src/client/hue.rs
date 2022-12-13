@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use tracing::{debug, instrument};
 use url::Host;
 
-use crate::client::model::hue::{HueResponse, HueRoom, TurnLightGroupOnOrOff};
+use crate::client::model::hue::{HueResponse, HueRoom};
 use uuid::Uuid;
 
-use super::model::hue::GroupedLight;
+use super::model::hue::{GroupedLight, GroupedLightPutBody, LightGroupOn};
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 #[derive(Debug)]
@@ -76,17 +76,15 @@ impl HueClient {
     pub async fn turn_on(
         &self,
         grouped_light_room_id: Uuid,
+        brightness: Option<f32>,
     ) -> anyhow::Result<HueResponse<GroupedLight>> {
+        let request_body = GroupedLightPutBody::builder().on(LightGroupOn::ON).build();
+
         let url = self
             .base_url
             .join(format!("grouped_light/{}", grouped_light_room_id).as_str())
             .expect("unable to parse grouped light url");
-        let response = self
-            .http_client
-            .put(url)
-            .json(&TurnLightGroupOnOrOff::ON)
-            .send()
-            .await?;
+        let response = self.http_client.put(url).json(&request_body).send().await?;
         let status = response.status();
         if !status.is_success() {
             let response_body = &response.text().await?;
@@ -111,12 +109,9 @@ impl HueClient {
             .join(format!("grouped_light/{}", grouped_light_room_id).as_str())
             .expect("unable to build the request URI");
 
-        let response = self
-            .http_client
-            .put(url)
-            .json(&TurnLightGroupOnOrOff::OFF)
-            .send()
-            .await?;
+        let request_body = GroupedLightPutBody::builder().on(LightGroupOn::OFF).build();
+
+        let response = self.http_client.put(url).json(&request_body).send().await?;
         let status = response.status();
         if !status.is_success() {
             let response_body = response.text().await?;
