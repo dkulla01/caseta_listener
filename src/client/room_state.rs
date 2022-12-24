@@ -9,13 +9,13 @@ const MAXIMUM_CACHE_SIZE: u16 = 1000;
 const MAXIMUM_CACHE_DURATION: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
-pub struct CurrentSceneEntry {
+pub struct CurrentRoomState {
     pub scene: Scene,
     pub brightness: Option<f32>,
     pub on: bool,
 }
 
-impl CurrentSceneEntry {
+impl CurrentRoomState {
     pub fn new(scene: Scene, brightness: Option<f32>, on: bool) -> Self {
         Self {
             scene,
@@ -25,9 +25,9 @@ impl CurrentSceneEntry {
     }
 }
 
-pub type CurrentSceneCache = Cache<Uuid, CurrentSceneEntry>;
+pub type CurrentRoomStateCache = Cache<Uuid, CurrentRoomState>;
 
-pub fn new_cache() -> CurrentSceneCache {
+pub fn new_cache() -> CurrentRoomStateCache {
     Cache::builder()
         .max_capacity(MAXIMUM_CACHE_SIZE.into())
         .time_to_live(MAXIMUM_CACHE_DURATION)

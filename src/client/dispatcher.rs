@@ -1,15 +1,20 @@
 use crate::client::hue::HueClient;
-use crate::client::scene_state::CurrentSceneEntry;
+use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
 use crate::config::scene::{Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
+use std::cmp::min;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use super::model::hue::{GroupedLight, HueResponse};
-use super::scene_state::CurrentSceneCache;
+use super::room_state::CurrentRoomStateCache;
+
+const BRIGHTNESS_UPDATE_AMOUNT: f32 = 5.0;
+const MAXIMUM_BRIGHTNESS_PERCENT: f32 = 100.0;
+const MINIMUM_BRIGHTNESS_PERCENT: f32 = 1.0;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DeviceAction {
@@ -41,7 +46,7 @@ pub struct DeviceActionDispatcher {
     message_receiver: Receiver<DeviceActionMessage>,
     hue_client: HueClient,
     topology: Arc<Topology>,
-    current_scene_cache: Arc<CurrentSceneCache>,
+    current_scene_cache: Arc<CurrentRoomStateCache>,
 }
 
 impl DeviceActionDispatcher {
@@ -49,7 +54,7 @@ impl DeviceActionDispatcher {
         message_receiver: Receiver<DeviceActionMessage>,
         hue_client: HueClient,
         topology: Arc<Topology>,
-        current_scene_cache: Arc<CurrentSceneCache>,
+        current_scene_cache: Arc<CurrentRoomStateCache>,
     ) -> DeviceActionDispatcher {
         DeviceActionDispatcher {
             message_receiver,
@@ -59,7 +64,7 @@ impl DeviceActionDispatcher {
         }
     }
 
-    async fn get_current_scene(&self, room: &Room) -> Result<CurrentSceneEntry> {
+    async fn get_current_state(&self, room: &Room) -> Result<CurrentRoomState> {
         let cache_entry = self.current_scene_cache.get(&room.room_id);
         return match cache_entry {
             Some(entry) => Ok(entry),
@@ -80,9 +85,8 @@ impl DeviceActionDispatcher {
         };
     }
 
-    fn cache_current_scene(&self, room_id: Uuid, current_scene_entry: CurrentSceneEntry) {
-        self.current_scene_cache
-            .insert(room_id, current_scene_entry)
+    fn cache_current_state(&self, room_id: Uuid, current_room_state: CurrentRoomState) {
+        self.current_scene_cache.insert(room_id, current_room_state)
     }
 
     fn get_first_scene(&self, remote_id: &RemoteId) -> &Scene {
@@ -98,7 +102,7 @@ impl DeviceActionDispatcher {
     fn build_cache_entry(
         scene: &Scene,
         grouped_light_response: &HueResponse<GroupedLight>,
-    ) -> CurrentSceneEntry {
+    ) -> CurrentRoomState {
         let grouped_light = grouped_light_response
             .data
             .first()
@@ -107,16 +111,33 @@ impl DeviceActionDispatcher {
             true => Some(grouped_light.dimming.brightness),
             false => None,
         };
-        CurrentSceneEntry::new(scene.clone(), brightness, grouped_light.on.on)
+        CurrentRoomState::new(scene.clone(), brightness, grouped_light.on.on)
+    }
+
+    fn get_room_configuration(&self, remote_id: u8) -> (&CasetaRemote, &Room) {
+        let (remote, room) = &self
+            .topology
+            .get(&remote_id)
+            .expect(format!("no configuration present for remote {}", remote_id).as_str());
+
+        return (remote, room);
+    }
+
+    fn get_bounded_next_higher_brightness_val(current_value: f32) -> f32 {
+        let quotient = (current_value / BRIGHTNESS_UPDATE_AMOUNT).trunc();
+        let next_higher_value = BRIGHTNESS_UPDATE_AMOUNT * (quotient + 1.0);
+        f32::min(MAXIMUM_BRIGHTNESS_PERCENT, next_higher_value)
+    }
+
+    fn get_bounded_next_lower_brightness_val(current_value: f32) -> f32 {
+        let quotient = (current_value / BRIGHTNESS_UPDATE_AMOUNT).trunc();
+        let next_lower_value = BRIGHTNESS_UPDATE_AMOUNT * (quotient - 1.0);
+        f32::max(MINIMUM_BRIGHTNESS_PERCENT, next_lower_value)
     }
 
     async fn handle_power_on_button_press(&self, message: DeviceActionMessage) -> Result<()> {
         ensure!(message.button_id == ButtonId::PowerOn);
-        let topology = &self.topology;
-
-        let (remote, room) = topology
-            .get(&message.remote_id)
-            .expect(format!("no configuration present for remote {}", message.remote_id).as_str());
+        let (remote, room) = self.get_room_configuration(message.remote_id);
         match remote {
             CasetaRemote::TwoButtonPico { .. } => {
                 bail!("we haven't implemented 2 button picos yet")
@@ -124,18 +145,16 @@ impl DeviceActionDispatcher {
             _ => (),
         }
 
-        let current_scene = self.get_current_scene(room).await?;
+        let current_room_state = self.get_current_state(room).await?;
 
         match message.device_action {
             DeviceAction::SinglePressComplete => {
                 debug!("got a single press for remote in room {}", room.name);
-                if !current_scene.on {
-                    let current_light_status = self
-                        .hue_client
-                        .turn_on(room.grouped_light_room_id, Option::None)
-                        .await?;
+                if !current_room_state.on {
+                    let current_light_status =
+                        self.hue_client.turn_on(room.grouped_light_room_id).await?;
                     let scene = self.get_first_scene(&message.remote_id);
-                    self.cache_current_scene(
+                    self.cache_current_state(
                         room.room_id,
                         Self::build_cache_entry(scene, &current_light_status),
                     )
@@ -160,27 +179,108 @@ impl DeviceActionDispatcher {
 
     async fn handle_power_off_button_press(&self, message: DeviceActionMessage) -> Result<()> {
         ensure!(message.button_id == ButtonId::PowerOff);
-        let topology = &self.topology;
-        let (remote, room) = topology
-            .get(&message.remote_id)
-            .expect(format!("no configuration present for remote {}", message.remote_id).as_str());
+        let (remote, room) = self.get_room_configuration(message.remote_id);
         match remote {
             CasetaRemote::TwoButtonPico { .. } => bail!("two button picos are not supported yet"),
             _ => (),
         }
 
-        let current_scene = self.get_current_scene(room).await?;
+        let current_room_state = self.get_current_state(room).await?;
         match message.device_action {
             DeviceAction::SinglePressComplete
             | DeviceAction::DoublePressComplete
             | DeviceAction::LongPressComplete => {
                 self.hue_client.turn_off(room.grouped_light_room_id).await?;
-                let mut turned_off_scene = current_scene.clone();
+                let mut turned_off_scene = current_room_state.clone();
                 turned_off_scene.on = false;
-                self.cache_current_scene(room.room_id, turned_off_scene);
+                self.cache_current_state(room.room_id, turned_off_scene);
             }
             DeviceAction::LongPressStart | DeviceAction::LongPressOngoing => (),
         }
+        Ok(())
+    }
+
+    async fn handle_up_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        ensure!(message.button_id == ButtonId::Up);
+        let (remote, room) = self.get_room_configuration(message.remote_id);
+        let current_room_state = self.get_current_state(room).await?;
+
+        if !current_room_state.on {
+            // can't increase brightness of a room that's off
+            // todo: maybe a double press when it's off turns the lights on to full brightness?
+            return Ok(());
+        }
+
+        self.handle_brightness_change_button_press(
+            message,
+            room,
+            current_room_state,
+            Self::get_bounded_next_higher_brightness_val,
+        )
+        .await
+    }
+
+    async fn handle_down_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        ensure!(message.button_id == ButtonId::Down);
+        let (_remote, room) = self.get_room_configuration(message.remote_id);
+        let current_room_state = self.get_current_state(room).await?;
+
+        if !current_room_state.on {
+            // can't decrease brightness of a room that's off
+            // todo: maybe a double press when it's off turns the lights on to minimum brightness?
+            return Ok(());
+        }
+
+        self.handle_brightness_change_button_press(
+            message,
+            room,
+            current_room_state,
+            Self::get_bounded_next_lower_brightness_val,
+        )
+        .await
+    }
+
+    async fn handle_brightness_change_button_press(
+        &self,
+        message: DeviceActionMessage,
+        room: &Room,
+        current_room_state: CurrentRoomState,
+        update_fn: fn(f32) -> f32,
+    ) -> Result<()> {
+        if !current_room_state.on {
+            // can't update brightness of a room that's off
+            // todo: maybe a double press when it's off turns the lights on to full brightness?
+            return Ok(());
+        }
+
+        let mut target_brightness = current_room_state.brightness.expect(
+            format!(
+                "room {} is on, but its brightness is not specified",
+                room.name
+            )
+            .as_str(),
+        );
+        match message.device_action {
+            DeviceAction::SinglePressComplete
+            | DeviceAction::LongPressStart
+            | DeviceAction::LongPressOngoing => {
+                target_brightness = update_fn(target_brightness);
+            }
+            DeviceAction::DoublePressComplete => {
+                let intermediate_brightness = update_fn(target_brightness);
+                target_brightness = update_fn(intermediate_brightness);
+            }
+            DeviceAction::LongPressComplete => {
+                // no op here. the long press is over, so there's no update needed
+            }
+        }
+
+        self.hue_client
+            .update_brightness(room.grouped_light_room_id, target_brightness)
+            .await?;
+        let mut new_room_state = current_room_state.clone();
+        new_room_state.brightness = Some(target_brightness);
+        self.cache_current_state(room.room_id, new_room_state);
         Ok(())
     }
 }
@@ -192,9 +292,9 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) -> Result<(
         let (_caseta_remote, room) = dispatcher.topology.get(&message.remote_id).unwrap();
         match message.button_id {
             ButtonId::PowerOn => dispatcher.handle_power_on_button_press(message).await?,
-            ButtonId::Up => todo!(),
+            ButtonId::Up => dispatcher.handle_up_button_press(message).await?,
             ButtonId::Favorite => todo!(),
-            ButtonId::Down => todo!(),
+            ButtonId::Down => dispatcher.handle_down_button_press(message).await?,
             ButtonId::PowerOff => dispatcher.handle_power_off_button_press(message).await?,
         }
 

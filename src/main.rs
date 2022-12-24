@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use caseta_listener::client::scene_state::new_cache;
+use caseta_listener::client::room_state::new_cache;
 use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
 use tracing::{debug, error, info, instrument, warn};

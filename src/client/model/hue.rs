@@ -30,7 +30,7 @@ impl LightGroupOn {
 #[derive(TypedBuilder, Serialize, Debug)]
 pub struct GroupedLightPutBody {
     on: LightGroupOn,
-    #[builder(default=None)]
+    #[builder(default=None, setter(strip_option))]
     #[serde(skip_serializing_if = "Option::is_none")]
     dimming: Option<LightGroupDimming>,
 }
@@ -51,6 +51,12 @@ pub struct RecallSceneBody {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LightGroupDimming {
     pub brightness: f32,
+}
+
+impl LightGroupDimming {
+    pub fn new(brightness: f32) -> Self {
+        Self { brightness }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

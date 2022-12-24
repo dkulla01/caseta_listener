@@ -9,7 +9,7 @@ use url::Host;
 use crate::client::model::hue::{HueResponse, HueRoom};
 use uuid::Uuid;
 
-use super::model::hue::{GroupedLight, GroupedLightPutBody, LightGroupOn};
+use super::model::hue::{GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn};
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 #[derive(Debug)]
@@ -73,17 +73,19 @@ impl HueClient {
         Ok(rooms_by_id)
     }
 
+    fn build_grouped_light_url(&self, grouped_light_room_id: Uuid) -> Url {
+        self.base_url
+            .join(format!("grouped_light/{}", grouped_light_room_id).as_str())
+            .expect("unable to build the request URI")
+    }
+
     pub async fn turn_on(
         &self,
         grouped_light_room_id: Uuid,
-        brightness: Option<f32>,
     ) -> anyhow::Result<HueResponse<GroupedLight>> {
         let request_body = GroupedLightPutBody::builder().on(LightGroupOn::ON).build();
 
-        let url = self
-            .base_url
-            .join(format!("grouped_light/{}", grouped_light_room_id).as_str())
-            .expect("unable to parse grouped light url");
+        let url = self.build_grouped_light_url(grouped_light_room_id);
         let response = self.http_client.put(url).json(&request_body).send().await?;
         let status = response.status();
         if !status.is_success() {
@@ -103,12 +105,38 @@ impl HueClient {
         self.get_grouped_light(grouped_light_room_id).await
     }
 
-    pub async fn turn_off(&self, grouped_light_room_id: Uuid) -> anyhow::Result<()> {
-        let url = self
-            .base_url
-            .join(format!("grouped_light/{}", grouped_light_room_id).as_str())
-            .expect("unable to build the request URI");
+    pub async fn update_brightness(
+        &self,
+        grouped_light_room_id: Uuid,
+        brightness: f32,
+    ) -> anyhow::Result<()> {
+        let url = self.build_grouped_light_url(grouped_light_room_id);
+        let request_body = GroupedLightPutBody::builder()
+            .dimming(LightGroupDimming::new(brightness))
+            .on(LightGroupOn::ON)
+            .build();
+        let response = self.http_client.put(url).json(&request_body).send().await?;
 
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().await?;
+            error!(
+                "there was a problem turning on the grouped light {}. status: {}, body: {}",
+                grouped_light_room_id, status, response_body
+            );
+            bail!(
+                "there was a problem turning on the grouped light {}. status: {}, body: {}",
+                grouped_light_room_id,
+                status,
+                response_body
+            )
+        }
+
+        Ok(())
+    }
+
+    pub async fn turn_off(&self, grouped_light_room_id: Uuid) -> anyhow::Result<()> {
+        let url = self.build_grouped_light_url(grouped_light_room_id);
         let request_body = GroupedLightPutBody::builder().on(LightGroupOn::OFF).build();
 
         let response = self.http_client.put(url).json(&request_body).send().await?;
