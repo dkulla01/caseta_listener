@@ -1,0 +1,6 @@
+caseta_host: 192.168.86.144
+caseta_port: 23
+caseta_username:
+caseta_password:
+hue_application_key:
+hue_host:

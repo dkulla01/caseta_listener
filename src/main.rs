@@ -1,117 +1,196 @@
-use std::io;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use bytes::BytesMut;
-use tokio::io::{ AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::net::TcpStream;
-use std::sync::{Mutex, Arc};
+use anyhow::{anyhow, Result};
+use caseta_listener::client::room_state::new_cache;
+use tokio::sync::mpsc;
+use tracing::subscriber::set_global_default;
+use tracing::{debug, error, info, instrument, warn};
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
-type Result<T> = std::result::Result<T, String>;
+use caseta_listener::caseta::connection::{
+    CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider,
+};
+use caseta_listener::caseta::message::Message;
+use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteHistory, RemoteWatcher};
+use caseta_listener::client::dispatcher::{
+    dispatcher_loop, DeviceActionDispatcher, DeviceActionMessage,
+};
+use caseta_listener::client::hue::HueClient;
+use caseta_listener::config::caseta_auth_configuration::get_caseta_auth_configuration;
+use caseta_listener::config::caseta_remote::{
+    get_caseta_remote_configuration, ButtonAction, CasetaRemote, RemoteConfiguration, RemoteId,
+};
+use caseta_listener::config::hue_auth_configuration::get_hue_auth_configuration;
+use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room, Topology};
 
-struct CasetaConnection {
-    stream: BufWriter<TcpStream>,
-    logged_in: Arc<Mutex<bool>>
-}
-
-impl CasetaConnection {
-    fn new(socket: TcpStream) -> CasetaConnection {
-        CasetaConnection {
-            stream: BufWriter::new(socket),
-            logged_in: Arc::new(Mutex::new(false))
-        }
-    }
-
-    async fn read_frame(&mut self) -> Result<Option<String>> {
-
-        let mut buffer = BytesMut::with_capacity(128);
-        let num_bytes_read = self.stream.read_buf(&mut buffer).await.expect("uh oh, there was a problem");
-        if num_bytes_read == 0 {
-            if buffer.is_empty() {
-                return Ok(None)
-            } else {
-                return Err("uh oh".into());
-            }
-        }
-        let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
-        Ok(Some(String::from(contents)))
-    }
-
-    async fn write(&mut self, message: &str) -> Result<()> {
-        let outcome = self.stream.write(message.as_bytes())
-            .await;
-
-        if outcome.is_err() {
-            return Err(String::from("couldn't write the buffer"))
-        }
-        self.stream.flush().await.expect("couldn't flush the buffer");
-        Ok(())
-    }
-
-    async fn log_in(&mut self) -> Result<()> {
-        let mutex = self.logged_in.clone();
-        let mut is_logged_in = mutex.lock().unwrap();
-        if *is_logged_in {
-            return Ok(());
-        }
-
-        self.write("lutron\r\n").await.expect("uh oh....");
-        let contents = self.read_frame().await.expect("something weird happened");
-
-        if contents.is_some() {
-            println!("got contents: {}", contents.unwrap());
-        }
-        self.write("integration\r\n").await.expect("again, uh oh");
-        let contents = self.read_frame().await.expect("something weird, again");
-
-
-        match contents {
-            Some(val) => {
-                if val.starts_with("GNET>") {
-                    println!("got contents: {}", val);
-                    *is_logged_in = true;
-                    return Ok(())
-                }
-                Err(format!("there was a problem logging in. got `{}` instead of GNET>", val))
-            }
-            _ => Err(String::from("there was a problem logging in"))
-        }
-
-    }
-
-    async fn write_keep_alive_message(&mut self) -> Result<()>{
-        self.write("\r\n").await
-    }
-
-}
+type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    let stream = TcpStream::connect("192.168.86.144:23").await?;
+async fn main() -> Result<()> {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let formatting_layer = BunyanFormattingLayer::new("caseta_listener".into(), std::io::stdout);
 
-    let mut connection = CasetaConnection::new(stream);
+    let subscriber = Registry::default()
+        .with(env_filter)
+        .with(JsonStorageLayer)
+        .with(formatting_layer);
 
-    let contents = connection.read_frame().await.expect("something weird happened");
+    set_global_default(subscriber).expect("Failed to set subscriber");
+    watch_caseta_events().await
+}
 
-    match contents {
-        Some(val) => {
-            if val.starts_with("login:") {
-                println!("starting the login sequence")
-            } else {
-                panic!("expected login prompt but got {}", val);
+#[instrument]
+async fn watch_caseta_events() -> Result<()> {
+    let caseta_hub_settings = get_caseta_auth_configuration().unwrap();
+    let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
+    let home_scene_configuration = get_room_configurations().unwrap();
+    let hue_auth_configuration = get_hue_auth_configuration().unwrap();
+    let topology = Arc::new(build_topology(
+        caseta_remote_configuration,
+        home_scene_configuration,
+    ));
+
+    let caseta_address = caseta_hub_settings.caseta_host.clone();
+    let port = caseta_hub_settings.caseta_port;
+    let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
+    let mut connection = CasetaConnection::new(caseta_hub_settings, &tcp_socket_provider);
+    connection.initialize().await?;
+
+    let (action_sender, mut action_receiver) = mpsc::channel(64);
+    let mut remote_watchers: RemoteWatcherDb = HashMap::new();
+    let hue_client = HueClient::new(
+        hue_auth_configuration.host,
+        hue_auth_configuration.application_key,
+    );
+    let dispatcher = DeviceActionDispatcher::new(
+        action_receiver,
+        hue_client,
+        topology.clone(),
+        Arc::new(new_cache()),
+    );
+    tokio::spawn(dispatcher_loop(dispatcher));
+    loop {
+        let contents = connection.await_message().await;
+        match contents {
+            Ok(Message::ButtonEvent {
+                remote_id,
+                button_id,
+                button_action,
+            }) => {
+                let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
+                let (remote, room) = topology.get(&remote_id).expect(
+                    format!("there must be configuration for this remote {}", remote_id).as_str(),
+                );
+                debug!(
+                    remote_id=%remote_id,
+                    button_id=%button_id,
+                    button_action=%button_action,
+                    button_key=button_key.as_str(),
+                    "Observed a button event: {}, room: {}",
+                    button_key,
+                    room.name
+                );
+
+                match remote_watchers.entry(remote_id) {
+                    Entry::Occupied(mut entry) => {
+                        let remote_watcher = entry.get();
+                        let remote_history = remote_watcher.remote_history.clone();
+                        let mut remote_history = remote_history.lock().unwrap();
+                        if remote_history.is_finished() {
+                            if let ButtonAction::Release = button_action {
+                                debug!("we saw a ButtonAction::Release for an initial button action, so we're ignoring it");
+                                continue;
+                            }
+                            let remote_watcher = Arc::new(RemoteWatcher::new(
+                                remote_id,
+                                button_id,
+                                action_sender.clone(),
+                            ));
+                            remote_watcher
+                                .remote_history
+                                .lock()
+                                .unwrap()
+                                .increment(&button_id, &button_action)
+                                .unwrap();
+                            entry.insert(remote_watcher.clone());
+                            tokio::spawn(remote_watcher_loop(remote_watcher));
+                        } else {
+                            remote_history
+                                .increment(&button_id, &button_action)
+                                .unwrap()
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        if let ButtonAction::Release = button_action {
+                            debug!("we saw a ButtonAction::Release for an initial button action, so we're ignoring it");
+                            continue;
+                        }
+                        let remote_watcher = Arc::new(RemoteWatcher::new(
+                            remote_id,
+                            button_id,
+                            action_sender.clone(),
+                        ));
+                        let remote_history = remote_watcher.remote_history.clone();
+                        let mut remote_history = remote_history.lock().unwrap();
+                        remote_history
+                            .increment(&button_id, &button_action)
+                            .unwrap();
+                        entry.insert(remote_watcher.clone());
+                        tokio::spawn(remote_watcher_loop(remote_watcher));
+                    }
+                }
+            }
+            Ok(unexpected_contents) => {
+                warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents)
+            }
+            Err(CasetaConnectionError::Disconnected) => {
+                info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
+                connection = CasetaConnection::new(
+                    get_caseta_auth_configuration().unwrap(),
+                    &tcp_socket_provider,
+                );
+                connection.initialize().await?;
+            }
+            Err(other_caseta_connection_err) => {
+                error!(caseta_connection_error=%other_caseta_connection_err, "there was a problem with the caseta connection");
+                break Err(anyhow!(
+                    "there was an issue with the caseta connection {:?} ",
+                    other_caseta_connection_err
+                ));
             }
         }
-        None => {
-            panic!("expected to read the login prompt but got nothing");
+    }
+}
+
+fn build_topology(
+    caseta_remote_configuration: RemoteConfiguration,
+    home_configuration: HomeConfiguration,
+) -> Topology {
+    let mut remotes_by_remote_id: HashMap<RemoteId, CasetaRemote> = HashMap::new();
+    for remote in caseta_remote_configuration.remotes.iter() {
+        match remote {
+            CasetaRemote::TwoButtonPico { id, .. } => {
+                remotes_by_remote_id.insert(*id, remote.clone());
+            }
+            CasetaRemote::FiveButtonPico { id, .. } => {
+                remotes_by_remote_id.insert(*id, remote.clone());
+            }
         }
     }
 
-    connection.log_in().await.expect("unable to log in");
-
-    loop {
-        let contents = connection.read_frame().await.expect("something weird, again");
-        if contents.is_some() {
-            println!("got contents: {}", contents.unwrap());
+    let mut topology: Topology = HashMap::new();
+    for room in home_configuration.rooms.iter() {
+        for remote_id in room.remotes.iter() {
+            let remote = remotes_by_remote_id
+                .get(&remote_id)
+                .expect(format!("no remote with id {} in our configuration", *remote_id).as_str());
+            topology.insert(*remote_id, (remote.clone(), room.clone()));
         }
     }
 
-    Ok(())
+    topology
 }
