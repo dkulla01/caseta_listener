@@ -15,7 +15,7 @@ use caseta_listener::caseta::connection::{
     CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider,
 };
 use caseta_listener::caseta::message::Message;
-use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
+use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteHistory, RemoteWatcher};
 use caseta_listener::client::dispatcher::{
     dispatcher_loop, DeviceActionDispatcher, DeviceActionMessage,
 };
@@ -101,6 +101,10 @@ async fn watch_caseta_events() -> Result<()> {
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
                         if remote_history.is_finished() {
+                            if let ButtonAction::Release = button_action {
+                                debug!("we saw a ButtonAction::Release for an initial button action, so we're ignoring it");
+                                continue;
+                            }
                             let remote_watcher = Arc::new(RemoteWatcher::new(
                                 remote_id,
                                 button_id,
@@ -110,15 +114,19 @@ async fn watch_caseta_events() -> Result<()> {
                                 .remote_history
                                 .lock()
                                 .unwrap()
-                                .increment(button_id, &button_action);
+                                .increment(&button_id, &button_action)
+                                .unwrap();
                             entry.insert(remote_watcher.clone());
                             tokio::spawn(remote_watcher_loop(remote_watcher));
                         } else {
-                            remote_history.increment(button_id, &button_action)
+                            remote_history
+                                .increment(&button_id, &button_action)
+                                .unwrap()
                         }
                     }
                     Entry::Vacant(entry) => {
                         if let ButtonAction::Release = button_action {
+                            debug!("we saw a ButtonAction::Release for an initial button action, so we're ignoring it");
                             continue;
                         }
                         let remote_watcher = Arc::new(RemoteWatcher::new(
@@ -128,7 +136,9 @@ async fn watch_caseta_events() -> Result<()> {
                         ));
                         let remote_history = remote_watcher.remote_history.clone();
                         let mut remote_history = remote_history.lock().unwrap();
-                        remote_history.increment(button_id, &button_action);
+                        remote_history
+                            .increment(&button_id, &button_action)
+                            .unwrap();
                         entry.insert(remote_watcher.clone());
                         tokio::spawn(remote_watcher_loop(remote_watcher));
                     }

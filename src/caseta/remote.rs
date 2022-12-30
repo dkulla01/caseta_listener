@@ -2,12 +2,14 @@ use crate::client::dispatcher::{DeviceAction, DeviceActionMessage};
 use crate::client::hue::HueClient;
 use crate::config::caseta_remote::{ButtonAction, ButtonId};
 use crate::config::scene::Room;
+use anyhow::{bail, ensure};
+use anyhow::{Ok, Result};
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Instant};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
@@ -71,20 +73,24 @@ impl RemoteHistory {
     // instead of incrementing press and release counts, I want this to walk through the transitions in the button
     // behavior state machine
     #[instrument]
-    pub fn increment(&mut self, button_id: ButtonId, button_action: &ButtonAction) -> () {
-        if button_id != self.button_id {
-            return;
-        }
+    pub fn increment(&mut self, button_id: &ButtonId, button_action: &ButtonAction) -> Result<()> {
+        ensure!(
+            button_id == &self.button_id,
+            format!(
+                "button id argument {} does not match the owned button ID {}",
+                button_id, self.button_id,
+            )
+        );
         if self.button_state.is_none() {
             match button_action {
                 ButtonAction::Press => {
                     self.button_state = Option::Some(ButtonState::FirstPressAwaitingRelease);
                 }
                 ButtonAction::Release => {
-                    // no-op for releases on the first button action
+                    bail!("there's no button state yet, but the first action we saw for this button was a release.")
                 }
             }
-            return;
+            return Ok(());
         }
 
         let current_button_state = self.button_state.as_ref().unwrap();
@@ -101,16 +107,18 @@ impl RemoteHistory {
                     next_button_state,
                     button_action
                 );
-                self.button_state = Option::Some(next_button_state)
+                self.button_state = Option::Some(next_button_state);
+                Ok(())
             }
-            (_ignored_button_state, _ignored_action) => {
-                debug!(
-                    current_button_state=%_ignored_button_state,
-                    button_action=%_ignored_action,
-                    "no-op here, because the current button state is {}, but we saw a button {}",
-                    _ignored_button_state,
-                    _ignored_action
+            (_current_button_state, _current_action) => {
+                error!(
+                    current_button_state=%_current_button_state,
+                    button_action=%_current_action,
+                    "the current button state is {}, but we saw a button {}, which indicates some kind of issue",
+                    _current_button_state,
+                    _current_action
                 );
+                bail!(format!("the current button state is {}, but we saw a button {}, which indicates some kind of issue", &_current_button_state, &_current_action))
             }
         }
     }
