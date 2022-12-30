@@ -44,6 +44,21 @@ pub enum RecallSceneAction {
 
 #[derive(Serialize, Debug)]
 pub struct RecallSceneBody {
+    recall: RecallSceneOptions,
+}
+
+impl RecallSceneBody {
+    pub fn new(brightness: f32) -> Self {
+        let options = RecallSceneOptions::builder()
+            .action(RecallSceneAction::Static)
+            .dimming(LightGroupDimming::new(brightness))
+            .build();
+        Self { recall: options }
+    }
+}
+
+#[derive(TypedBuilder, Serialize, Debug)]
+struct RecallSceneOptions {
     action: RecallSceneAction,
     dimming: LightGroupDimming,
 }

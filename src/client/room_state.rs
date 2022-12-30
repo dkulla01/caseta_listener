@@ -10,13 +10,13 @@ const MAXIMUM_CACHE_DURATION: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub struct CurrentRoomState {
-    pub scene: Scene,
+    pub scene: Option<Scene>,
     pub brightness: Option<f32>,
     pub on: bool,
 }
 
 impl CurrentRoomState {
-    pub fn new(scene: Scene, brightness: Option<f32>, on: bool) -> Self {
+    pub fn new(scene: Option<Scene>, brightness: Option<f32>, on: bool) -> Self {
         Self {
             scene,
             brightness,

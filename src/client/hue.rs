@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Ok, Result};
 use log::error;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, Url};
+use reqwest::{Client, Response, Url};
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 use url::Host;
@@ -9,7 +9,10 @@ use url::Host;
 use crate::client::model::hue::{HueResponse, HueRoom};
 use uuid::Uuid;
 
-use super::model::hue::{GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn};
+use super::model::hue::{
+    GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn, RecallSceneAction,
+    RecallSceneBody,
+};
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 #[derive(Debug)]
@@ -155,6 +158,32 @@ impl HueClient {
             )
         }
 
+        Ok(())
+    }
+
+    pub async fn recall_scene(&self, scene_id: &Uuid, brightness: f32) -> Result<()> {
+        let url = self
+            .base_url
+            .join(format!("scene/{}", scene_id).as_str())
+            .expect("building the scene recall URL should not fail");
+
+        let body = RecallSceneBody::new(brightness);
+
+        let response = self.http_client.put(url).json(&body).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().await?;
+            error!(
+                "there was a problem recalling the scene {}. status: {}, body: {}",
+                scene_id, status, response_body
+            );
+            bail!(
+                "there was a problem recalling the scene {}. status: {}, body: {}",
+                scene_id,
+                status,
+                response_body
+            )
+        }
         Ok(())
     }
 }

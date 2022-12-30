@@ -1,7 +1,7 @@
 use crate::client::hue::HueClient;
 use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
-use crate::config::scene::{Room, Scene, Topology};
+use crate::config::scene::{self, Device, Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
 use std::cmp::min;
 use std::sync::Arc;
@@ -78,7 +78,7 @@ impl DeviceActionDispatcher {
                     .get_grouped_light(room.grouped_light_room_id)
                     .await?;
                 Ok(Self::build_cache_entry(
-                    &first_scene,
+                    Option::None,
                     &grouped_light_response,
                 ))
             }
@@ -89,18 +89,8 @@ impl DeviceActionDispatcher {
         self.current_scene_cache.insert(room_id, current_room_state)
     }
 
-    fn get_first_scene(&self, remote_id: &RemoteId) -> &Scene {
-        let (_, room) = self
-            .topology
-            .get(remote_id)
-            .expect(format!("no configuration present for remote {}", remote_id).as_str());
-        room.scenes
-            .first()
-            .expect("there should be at least one scene configured for every room")
-    }
-
     fn build_cache_entry(
-        scene: &Scene,
+        scene: Option<Scene>,
         grouped_light_response: &HueResponse<GroupedLight>,
     ) -> CurrentRoomState {
         let grouped_light = grouped_light_response
@@ -111,7 +101,7 @@ impl DeviceActionDispatcher {
             true => Some(grouped_light.dimming.brightness),
             false => None,
         };
-        CurrentRoomState::new(scene.clone(), brightness, grouped_light.on.on)
+        CurrentRoomState::new(scene, brightness, grouped_light.on.on)
     }
 
     fn get_room_configuration(&self, remote_id: u8) -> (&CasetaRemote, &Room) {
@@ -153,10 +143,9 @@ impl DeviceActionDispatcher {
                 if !current_room_state.on {
                     let current_light_status =
                         self.hue_client.turn_on(room.grouped_light_room_id).await?;
-                    let scene = self.get_first_scene(&message.remote_id);
                     self.cache_current_state(
                         room.room_id,
-                        Self::build_cache_entry(scene, &current_light_status),
+                        Self::build_cache_entry(current_room_state.scene, &current_light_status),
                     )
                 }
             }
@@ -283,6 +272,88 @@ impl DeviceActionDispatcher {
         self.cache_current_state(room.room_id, new_room_state);
         Ok(())
     }
+
+    async fn handle_favorite_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        ensure!(message.button_id == ButtonId::Favorite);
+        let (remote, room) = self.get_room_configuration(message.remote_id);
+        match remote {
+            CasetaRemote::TwoButtonPico { .. } => {
+                bail!("two button picos don't have favorite buttons")
+            }
+            _ => (),
+        }
+        let mut current_room_state = self.get_current_state(room).await?;
+        if !current_room_state.on {
+            // don't do anything to the scene if the lights in the room aren't on
+            return Ok(());
+        }
+
+        let brightness = current_room_state
+            .brightness
+            .expect("rooms that are on must have a brightness value associated with them");
+        let target_scene;
+
+        if current_room_state.scene.is_none() {
+            target_scene = Self::get_first_scene(room);
+        } else {
+            let current_scene = current_room_state.scene.unwrap();
+            match message.device_action {
+                DeviceAction::SinglePressComplete => {
+                    target_scene = Self::get_next_scene(room, &current_scene);
+                }
+                DeviceAction::DoublePressComplete => {
+                    target_scene = Self::get_previous_scene(room, &current_scene);
+                }
+                DeviceAction::LongPressComplete => target_scene = Self::get_first_scene(room),
+                DeviceAction::LongPressStart | DeviceAction::LongPressOngoing => return Ok(()), // no actions to take for non-terminal long press states
+            }
+        }
+        // here is where we'd update the hue device
+        for device in target_scene.devices.iter() {
+            if let Device::HueScene { id, name } = device {
+                debug!(
+                    "updating the hue scene to {} at brightness level {}",
+                    name, brightness
+                );
+                let response = self.hue_client.recall_scene(id, brightness).await?;
+            }
+        }
+        current_room_state.scene = Option::Some(target_scene.clone());
+        self.cache_current_state(room.room_id, current_room_state);
+
+        Ok(())
+    }
+
+    fn get_scene_index(room: &Room, current_scene: &Scene) -> usize {
+        room.scenes
+            .iter()
+            .position(|scene| scene.name == current_scene.name)
+            .expect(
+                format!(
+                    "scene {} should be present in configuration, but it was not",
+                    current_scene.name
+                )
+                .as_str(),
+            )
+    }
+
+    fn get_next_scene<'a>(room: &'a Room, current_scene: &Scene) -> &'a Scene {
+        let position = Self::get_scene_index(room, current_scene);
+        let scene_count = room.scenes.len();
+        room.scenes.get((position + 1) % scene_count).unwrap()
+    }
+
+    fn get_previous_scene<'a>(room: &'a Room, current_scene: &Scene) -> &'a Scene {
+        let position = Self::get_scene_index(room, current_scene);
+        let scene_count = room.scenes.len();
+        room.scenes.get((position - 1) % scene_count).unwrap()
+    }
+
+    fn get_first_scene<'a>(room: &'a Room) -> &'a Scene {
+        room.scenes
+            .first()
+            .expect("Rooms must be configured with at least one scene")
+    }
 }
 
 #[instrument(skip(dispatcher))]
@@ -293,7 +364,7 @@ pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) -> Result<(
         match message.button_id {
             ButtonId::PowerOn => dispatcher.handle_power_on_button_press(message).await?,
             ButtonId::Up => dispatcher.handle_up_button_press(message).await?,
-            ButtonId::Favorite => todo!(),
+            ButtonId::Favorite => dispatcher.handle_favorite_button_press(message).await?,
             ButtonId::Down => dispatcher.handle_down_button_press(message).await?,
             ButtonId::PowerOff => dispatcher.handle_power_off_button_press(message).await?,
         }
