@@ -1,9 +1,8 @@
 use crate::client::hue::HueClient;
 use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
-use crate::config::scene::{self, Device, Room, Scene, Topology};
+use crate::config::scene::{Device, Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
-use std::cmp::min;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, instrument};
@@ -43,7 +42,6 @@ impl DeviceActionMessage {
 }
 
 pub struct DeviceActionDispatcher {
-    message_receiver: Receiver<DeviceActionMessage>,
     hue_client: HueClient,
     topology: Arc<Topology>,
     current_scene_cache: Arc<CurrentRoomStateCache>,
@@ -51,13 +49,11 @@ pub struct DeviceActionDispatcher {
 
 impl DeviceActionDispatcher {
     pub fn new(
-        message_receiver: Receiver<DeviceActionMessage>,
         hue_client: HueClient,
         topology: Arc<Topology>,
         current_scene_cache: Arc<CurrentRoomStateCache>,
     ) -> DeviceActionDispatcher {
         DeviceActionDispatcher {
-            message_receiver,
             hue_client,
             topology,
             current_scene_cache,
@@ -69,10 +65,6 @@ impl DeviceActionDispatcher {
         return match cache_entry {
             Some(entry) => Ok(entry),
             None => {
-                let first_scene = room
-                    .scenes
-                    .first()
-                    .expect("configurations must have at least one scene");
                 let grouped_light_response = self
                     .hue_client
                     .get_grouped_light(room.grouped_light_room_id)
@@ -123,6 +115,16 @@ impl DeviceActionDispatcher {
         let quotient = (current_value / BRIGHTNESS_UPDATE_AMOUNT).trunc();
         let next_lower_value = BRIGHTNESS_UPDATE_AMOUNT * (quotient - 1.0);
         f32::max(MINIMUM_BRIGHTNESS_PERCENT, next_lower_value)
+    }
+
+    async fn handle_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        match message.button_id {
+            ButtonId::PowerOn => self.handle_power_on_button_press(message).await,
+            ButtonId::Up => self.handle_up_button_press(message).await,
+            ButtonId::Favorite => self.handle_favorite_button_press(message).await,
+            ButtonId::Down => self.handle_down_button_press(message).await,
+            ButtonId::PowerOff => self.handle_power_off_button_press(message).await,
+        }
     }
 
     async fn handle_power_on_button_press(&self, message: DeviceActionMessage) -> Result<()> {
@@ -191,7 +193,7 @@ impl DeviceActionDispatcher {
 
     async fn handle_up_button_press(&self, message: DeviceActionMessage) -> Result<()> {
         ensure!(message.button_id == ButtonId::Up);
-        let (remote, room) = self.get_room_configuration(message.remote_id);
+        let (_remote, room) = self.get_room_configuration(message.remote_id);
         let current_room_state = self.get_current_state(room).await?;
 
         if !current_room_state.on {
@@ -315,7 +317,7 @@ impl DeviceActionDispatcher {
                     "updating the hue scene to {} at brightness level {}",
                     name, brightness
                 );
-                let response = self.hue_client.recall_scene(id, brightness).await?;
+                let _response = self.hue_client.recall_scene(id, brightness).await?;
             }
         }
         current_room_state.scene = Option::Some(target_scene.clone());
@@ -357,30 +359,18 @@ impl DeviceActionDispatcher {
 }
 
 #[instrument(skip(dispatcher))]
-pub async fn dispatcher_loop(mut dispatcher: DeviceActionDispatcher) -> Result<()> {
+pub async fn dispatcher_loop(
+    dispatcher: Arc<DeviceActionDispatcher>,
+    mut action_receiver: Receiver<DeviceActionMessage>,
+) -> Result<()> {
     loop {
-        let message = dispatcher.message_receiver.recv().await.unwrap();
-        let (_caseta_remote, room) = dispatcher.topology.get(&message.remote_id).unwrap();
-        match message.button_id {
-            ButtonId::PowerOn => dispatcher.handle_power_on_button_press(message).await?,
-            ButtonId::Up => dispatcher.handle_up_button_press(message).await?,
-            ButtonId::Favorite => dispatcher.handle_favorite_button_press(message).await?,
-            ButtonId::Down => dispatcher.handle_down_button_press(message).await?,
-            ButtonId::PowerOff => dispatcher.handle_power_off_button_press(message).await?,
-        }
-
-        match message.device_action {
-            DeviceAction::SinglePressComplete => {
-                // let content = dispatcher.hue_client.get_room_status(room.grouped_light_room_id).await.unwrap();
-                // debug!(content=?content, "got some content from the hue api");
-                let content = dispatcher
-                    .hue_client
-                    .get_grouped_light(room.grouped_light_room_id)
-                    .await
-                    .unwrap();
-                debug!(content=?content, "got some content from the hue api");
-            }
-            _ => {}
-        }
+        let message = action_receiver.recv().await.unwrap();
+        let dispatcher_instance = dispatcher.clone();
+        tokio::spawn(async move {
+            dispatcher_instance
+                .clone()
+                .handle_button_press(message)
+                .await
+        });
     }
 }

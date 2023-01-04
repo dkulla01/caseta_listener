@@ -66,13 +66,12 @@ async fn watch_caseta_events() -> Result<()> {
         hue_auth_configuration.host,
         hue_auth_configuration.application_key,
     );
-    let dispatcher = DeviceActionDispatcher::new(
-        action_receiver,
+    let dispatcher = Arc::new(DeviceActionDispatcher::new(
         hue_client,
         topology.clone(),
         Arc::new(new_cache()),
-    );
-    tokio::spawn(dispatcher_loop(dispatcher));
+    ));
+    tokio::spawn(dispatcher_loop(dispatcher, action_receiver));
     loop {
         let contents = connection.await_message().await;
         match contents {
@@ -82,7 +81,7 @@ async fn watch_caseta_events() -> Result<()> {
                 button_action,
             }) => {
                 let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
-                let (remote, room) = topology.get(&remote_id).expect(
+                let (_remote, room) = topology.get(&remote_id).expect(
                     format!("there must be configuration for this remote {}", remote_id).as_str(),
                 );
                 debug!(
