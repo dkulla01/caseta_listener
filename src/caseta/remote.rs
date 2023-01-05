@@ -1,7 +1,5 @@
 use crate::client::dispatcher::{DeviceAction, DeviceActionMessage};
-use crate::client::hue::HueClient;
 use crate::config::caseta_remote::{ButtonAction, ButtonId};
-use crate::config::scene::Room;
 use anyhow::{bail, ensure};
 use anyhow::{Ok, Result};
 use std::fmt::{Display, Formatter};
@@ -12,7 +10,7 @@ use tokio::time::{sleep, Instant};
 use tracing::{debug, error, instrument, warn};
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
-const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(500);
+const REMOTE_WATCHER_LOOP_SLEEP_DURATION: Duration = Duration::from_millis(250);
 
 // note: it seems like caseta has some built in timeout for long presses.
 // when you press and hold the remote, it blinks once when you first press it, and then again after about 5 seconds

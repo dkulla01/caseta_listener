@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::model::hue::{GroupedLight, HueResponse};
 use super::room_state::CurrentRoomStateCache;
 
-const BRIGHTNESS_UPDATE_AMOUNT: f32 = 5.0;
+const BRIGHTNESS_UPDATE_AMOUNT: f32 = 10.0;
 const MAXIMUM_BRIGHTNESS_PERCENT: f32 = 100.0;
 const MINIMUM_BRIGHTNESS_PERCENT: f32 = 1.0;
 
