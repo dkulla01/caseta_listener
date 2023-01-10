@@ -1,4 +1,3 @@
-use config::builder;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -44,23 +43,29 @@ pub enum RecallSceneAction {
 
 #[derive(Serialize, Debug)]
 pub struct RecallSceneBody {
+    items: ActionPut,
     recall: RecallSceneOptions,
 }
 
 impl RecallSceneBody {
-    pub fn new(brightness: f32) -> Self {
+    pub fn new(brightness: Option<f32>) -> Self {
         let options = RecallSceneOptions::builder()
             .action(RecallSceneAction::Static)
-            .dimming(LightGroupDimming::new(brightness))
+            .dimming(brightness.map(LightGroupDimming::new))
             .build();
-        Self { recall: options }
+        Self {
+            items: ActionPut::TURN_ON,
+            recall: options,
+        }
     }
 }
 
 #[derive(TypedBuilder, Serialize, Debug)]
 struct RecallSceneOptions {
     action: RecallSceneAction,
-    dimming: LightGroupDimming,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimming: Option<LightGroupDimming>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -72,6 +77,19 @@ impl LightGroupDimming {
     pub fn new(brightness: f32) -> Self {
         Self { brightness }
     }
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ActionPut {
+    target: HueReference,
+    action: LightGroupOn,
+}
+
+impl ActionPut {
+    const TURN_ON: ActionPut = ActionPut {
+        target: HueReference::EMPTY,
+        action: LightGroupOn::ON,
+    };
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -88,13 +106,20 @@ pub struct HueObjectMetadata {
     pub archtype: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "rtype", content = "rid")]
 #[serde(rename_all = "snake_case")]
 pub enum HueReference {
     Device(Uuid),
     GroupedLight(Uuid),
     Room(Uuid),
+
+    #[serde(rename = "")]
+    Empty(String),
+}
+
+impl HueReference {
+    pub const EMPTY: HueReference = HueReference::Empty(String::new());
 }
 
 #[cfg(test)]

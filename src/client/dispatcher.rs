@@ -156,16 +156,33 @@ impl DeviceActionDispatcher {
         }
 
         let current_room_state = self.get_current_state(room).await?;
+        let target_scene = current_room_state
+            .scene
+            .as_ref()
+            .or_else(|| Option::Some(Self::get_first_scene(room)))
+            .expect("there must always be at least one scene configured. this is a bug");
 
         match message.device_action {
             DeviceAction::SinglePressComplete => {
                 debug!("got a single press for remote in room {}", room.name);
                 if !current_room_state.on {
-                    let current_light_status =
-                        self.hue_client.turn_on(room.grouped_light_room_id).await?;
+                    for device in target_scene.devices.iter() {
+                        if let Device::HueScene { id, name } = device {
+                            let _response = self.hue_client.recall_scene(id, Option::None).await?;
+                        }
+                    }
+
+                    let current_light_status = self
+                        .hue_client
+                        .get_grouped_light(room.grouped_light_room_id)
+                        .await?;
+
                     self.cache_current_state(
                         room.room_id,
-                        Self::build_cache_entry(current_room_state.scene, &current_light_status),
+                        Self::build_cache_entry(
+                            Option::Some(target_scene.clone()),
+                            &current_light_status,
+                        ),
                     )
                 }
             }
@@ -335,7 +352,10 @@ impl DeviceActionDispatcher {
                     "updating the hue scene to {} at brightness level {}",
                     name, brightness
                 );
-                let _response = self.hue_client.recall_scene(id, brightness).await?;
+                let _response = self
+                    .hue_client
+                    .recall_scene(id, Option::Some(brightness))
+                    .await?;
             }
         }
         current_room_state.scene = Option::Some(target_scene.clone());
