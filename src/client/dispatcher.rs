@@ -386,7 +386,11 @@ impl DeviceActionDispatcher {
     fn get_previous_scene<'a>(room: &'a Room, current_scene: &Scene) -> &'a Scene {
         let position = Self::get_scene_index(room, current_scene);
         let scene_count = room.scenes.len();
-        room.scenes.get((position - 1) % scene_count).unwrap()
+        let previous_scene_position = match position {
+            0 => scene_count - 1,
+            _ => (position - 1) % scene_count
+        };
+        room.scenes.get(previous_scene_position).unwrap()
     }
 
     fn get_first_scene<'a>(room: &'a Room) -> &'a Scene {
