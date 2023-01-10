@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Ok, Result};
 use log::error;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, Response, Url};
+use reqwest::{Client, Url};
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 use url::Host;
@@ -18,7 +18,6 @@ const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
 #[derive(Debug)]
 pub struct HueClient {
     base_url: Url,
-    auth_key: String,
     http_client: Client,
 }
 
@@ -39,12 +38,11 @@ impl HueClient {
             .expect("unable to parse the hue base URL");
         HueClient {
             base_url,
-            auth_key,
             http_client,
         }
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     pub async fn get_grouped_light(
         &self,
         grouped_light_room_id: Uuid,
@@ -61,6 +59,7 @@ impl HueClient {
             .map_err(|e| anyhow!(e))
     }
 
+    #[instrument(level = "debug")]
     pub async fn get_rooms(&self) -> Result<HashMap<Uuid, HueRoom>> {
         let url = self
             .base_url
@@ -82,32 +81,7 @@ impl HueClient {
             .expect("unable to build the request URI")
     }
 
-    pub async fn turn_on(
-        &self,
-        grouped_light_room_id: Uuid,
-    ) -> anyhow::Result<HueResponse<GroupedLight>> {
-        let request_body = GroupedLightPutBody::builder().on(LightGroupOn::ON).build();
-
-        let url = self.build_grouped_light_url(grouped_light_room_id);
-        let response = self.http_client.put(url).json(&request_body).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let response_body = &response.text().await?;
-            error!(
-                "there was a problem turning on the grouped_light {}. code: {}, body: {}",
-                grouped_light_room_id, status, response_body
-            );
-            anyhow::bail!(
-                "there was a problem turning on the grouped light {}. code: {}, body: {}",
-                grouped_light_room_id,
-                status,
-                response_body
-            )
-        }
-        // now the light should be on, so let's get the state of the grouped_light
-        self.get_grouped_light(grouped_light_room_id).await
-    }
-
+    #[instrument(level = "debug")]
     pub async fn update_brightness(
         &self,
         grouped_light_room_id: Uuid,
@@ -138,6 +112,7 @@ impl HueClient {
         Ok(())
     }
 
+    #[instrument(level = "debug")]
     pub async fn turn_off(&self, grouped_light_room_id: Uuid) -> anyhow::Result<()> {
         let url = self.build_grouped_light_url(grouped_light_room_id);
         let request_body = GroupedLightPutBody::builder().on(LightGroupOn::OFF).build();
@@ -161,7 +136,8 @@ impl HueClient {
         Ok(())
     }
 
-    pub async fn recall_scene(&self, scene_id: &Uuid, brightness: f32) -> Result<()> {
+    #[instrument(level = "debug")]
+    pub async fn recall_scene(&self, scene_id: &Uuid, brightness: Option<f32>) -> Result<()> {
         let url = self
             .base_url
             .join(format!("scene/{}", scene_id).as_str())

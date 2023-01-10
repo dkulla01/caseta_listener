@@ -15,17 +15,15 @@ use caseta_listener::caseta::connection::{
     CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider,
 };
 use caseta_listener::caseta::message::Message;
-use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteHistory, RemoteWatcher};
-use caseta_listener::client::dispatcher::{
-    dispatcher_loop, DeviceActionDispatcher, DeviceActionMessage,
-};
+use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
+use caseta_listener::client::dispatcher::{dispatcher_loop, DeviceActionDispatcher};
 use caseta_listener::client::hue::HueClient;
 use caseta_listener::config::caseta_auth_configuration::get_caseta_auth_configuration;
 use caseta_listener::config::caseta_remote::{
     get_caseta_remote_configuration, ButtonAction, CasetaRemote, RemoteConfiguration, RemoteId,
 };
 use caseta_listener::config::hue_auth_configuration::get_hue_auth_configuration;
-use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Room, Topology};
+use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Topology};
 
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
 
@@ -60,19 +58,18 @@ async fn watch_caseta_events() -> Result<()> {
     let mut connection = CasetaConnection::new(caseta_hub_settings, &tcp_socket_provider);
     connection.initialize().await?;
 
-    let (action_sender, mut action_receiver) = mpsc::channel(64);
+    let (action_sender, action_receiver) = mpsc::channel(64);
     let mut remote_watchers: RemoteWatcherDb = HashMap::new();
     let hue_client = HueClient::new(
         hue_auth_configuration.host,
         hue_auth_configuration.application_key,
     );
-    let dispatcher = DeviceActionDispatcher::new(
-        action_receiver,
+    let dispatcher = Arc::new(DeviceActionDispatcher::new(
         hue_client,
         topology.clone(),
         Arc::new(new_cache()),
-    );
-    tokio::spawn(dispatcher_loop(dispatcher));
+    ));
+    tokio::spawn(dispatcher_loop(dispatcher, action_receiver));
     loop {
         let contents = connection.await_message().await;
         match contents {
@@ -82,7 +79,7 @@ async fn watch_caseta_events() -> Result<()> {
                 button_action,
             }) => {
                 let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
-                let (remote, room) = topology.get(&remote_id).expect(
+                let (_remote, room) = topology.get(&remote_id).expect(
                     format!("there must be configuration for this remote {}", remote_id).as_str(),
                 );
                 debug!(
