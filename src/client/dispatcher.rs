@@ -3,8 +3,10 @@ use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
 use crate::config::scene::{Device, Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::Mutex;
 use tracing::{debug, instrument};
 use uuid::Uuid;
 
@@ -45,6 +47,7 @@ pub struct DeviceActionDispatcher {
     hue_client: HueClient,
     topology: Arc<Topology>,
     current_scene_cache: Arc<CurrentRoomStateCache>,
+    room_mutexes: HashMap<Uuid, Arc<Mutex<()>>>,
 }
 
 impl DeviceActionDispatcher {
@@ -57,6 +60,7 @@ impl DeviceActionDispatcher {
             hue_client,
             topology,
             current_scene_cache,
+            room_mutexes: HashMap::new(),
         }
     }
 
@@ -117,7 +121,15 @@ impl DeviceActionDispatcher {
         f32::max(MINIMUM_BRIGHTNESS_PERCENT, next_lower_value)
     }
 
-    async fn handle_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+    async fn handle_button_press(&mut self, message: DeviceActionMessage) -> Result<()> {
+        let (_remote, room) = self.get_room_configuration(message.remote_id);
+        let mutex = self
+            .room_mutexes
+            .entry(room.room_id)
+            .or_insert(Arc::new(Mutex::new(())));
+
+        mutex.clone().lock().await;
+
         match message.button_id {
             ButtonId::PowerOn => self.handle_power_on_button_press(message).await,
             ButtonId::Up => self.handle_up_button_press(message).await,
