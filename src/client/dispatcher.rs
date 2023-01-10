@@ -47,7 +47,7 @@ pub struct DeviceActionDispatcher {
     hue_client: HueClient,
     topology: Arc<Topology>,
     current_scene_cache: Arc<CurrentRoomStateCache>,
-    room_mutexes: HashMap<Uuid, Arc<Mutex<()>>>,
+    room_mutexes: Mutex<HashMap<Uuid, Arc<Mutex<()>>>>,
 }
 
 impl DeviceActionDispatcher {
@@ -60,7 +60,7 @@ impl DeviceActionDispatcher {
             hue_client,
             topology,
             current_scene_cache,
-            room_mutexes: HashMap::new(),
+            room_mutexes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -121,14 +121,20 @@ impl DeviceActionDispatcher {
         f32::max(MINIMUM_BRIGHTNESS_PERCENT, next_lower_value)
     }
 
-    async fn handle_button_press(&mut self, message: DeviceActionMessage) -> Result<()> {
-        let (_remote, room) = self.get_room_configuration(message.remote_id);
-        let mutex = self
-            .room_mutexes
-            .entry(room.room_id)
-            .or_insert(Arc::new(Mutex::new(())));
+    async fn handle_button_press(&self, message: DeviceActionMessage) -> Result<()> {
+        let room_mutex;
+        {
+            // lock the map of room mutexes while ensuring a room mutex exists for this room
+            let (_remote, room) = self.get_room_configuration(message.remote_id);
+            let mut room_mutexes_lock = self.room_mutexes.lock().await;
+            room_mutex = room_mutexes_lock
+                .entry(room.room_id)
+                .or_insert(Arc::new(Mutex::new(())))
+                .clone();
+        }
 
-        mutex.clone().lock().await;
+        // get the room mutex, lock it, and hold the lock until we're done making API requests
+        let _locked_room_mutex = room_mutex.lock().await;
 
         match message.button_id {
             ButtonId::PowerOn => self.handle_power_on_button_press(message).await,
