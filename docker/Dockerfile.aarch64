@@ -1,0 +1,4 @@
+FROM debian:buster-slim
+
+COPY "target/aarch64-unknown-linux-gnu/release/caseta_listener" "./"
+CMD [ "./caseta_listener" ]

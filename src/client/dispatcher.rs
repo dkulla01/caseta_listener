@@ -167,7 +167,7 @@ impl DeviceActionDispatcher {
                 debug!("got a single press for remote in room {}", room.name);
                 if !current_room_state.on {
                     for device in target_scene.devices.iter() {
-                        if let Device::HueScene { id, name } = device {
+                        if let Device::HueScene { id, .. } = device {
                             let _response = self.hue_client.recall_scene(id, Option::None).await?;
                         }
                     }
@@ -388,7 +388,7 @@ impl DeviceActionDispatcher {
         let scene_count = room.scenes.len();
         let previous_scene_position = match position {
             0 => scene_count - 1,
-            _ => (position - 1) % scene_count
+            _ => (position - 1) % scene_count,
         };
         room.scenes.get(previous_scene_position).unwrap()
     }

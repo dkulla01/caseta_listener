@@ -161,7 +161,7 @@ pub async fn remote_watcher_loop(watcher: Arc<RemoteWatcher>) {
     debug!(remote_id = remote_id, "started tracking remote");
     sleep(DOUBLE_CLICK_WINDOW).await;
     let mut device_action_message = Option::None;
-    let mut finished = false;
+    let mut finished: bool;
     {
         let history = watcher.remote_history.clone();
         let mut locked_history = history.lock().unwrap();

@@ -13,7 +13,6 @@ use tracing::{debug, error, instrument, trace, warn};
 use url::Host;
 
 use crate::caseta::message::Message;
-use crate::config::caseta_auth_configuration::CasetaAuthConfiguration;
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {
@@ -80,7 +79,8 @@ impl TcpSocketProvider for DefaultTcpSocketProvider {
 
 pub struct CasetaConnection<'a> {
     tcp_socket_provider: &'a (dyn TcpSocketProvider + 'a),
-    caseta_hub_settings: CasetaAuthConfiguration,
+    caseta_username: String,
+    caseta_password: String,
     stream: Option<BufWriter<TcpStream>>,
     logged_in: bool,
     disconnect_sender: mpsc::Sender<DisconnectCommand>,
@@ -95,13 +95,15 @@ impl Debug for CasetaConnection<'_> {
 
 impl<'a> CasetaConnection<'a> {
     pub fn new(
-        caseta_hub_settings: CasetaAuthConfiguration,
+        caseta_username: String,
+        caseta_password: String,
         tcp_socket_provider: &'a dyn TcpSocketProvider,
     ) -> CasetaConnection<'a> {
         let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
         CasetaConnection {
             tcp_socket_provider,
-            caseta_hub_settings,
+            caseta_username,
+            caseta_password,
             stream: Option::None,
             logged_in: false,
             disconnect_sender,
@@ -173,7 +175,7 @@ impl<'a> CasetaConnection<'a> {
                 error!("got an error: {:?}", e);
             }
         }
-        self.write(format!("{}\r\n", self.caseta_hub_settings.caseta_username).as_str())
+        self.write(format!("{}\r\n", self.caseta_username).as_str())
             .await?;
         let contents = self.read_frame().await;
         match contents {
@@ -191,7 +193,7 @@ impl<'a> CasetaConnection<'a> {
             }
         }
         if let Ok(()) = self
-            .write(format!("{}\r\n", self.caseta_hub_settings.caseta_password).as_str())
+            .write(format!("{}\r\n", self.caseta_password).as_str())
             .await
         {
         } else {

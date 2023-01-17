@@ -1,6 +1,5 @@
 use crate::config::caseta_remote::{ButtonAction, ButtonId, RemoteId};
-use anyhow::anyhow;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
 #[derive(Debug)]

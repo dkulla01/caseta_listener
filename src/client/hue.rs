@@ -10,8 +10,7 @@ use crate::client::model::hue::{HueResponse, HueRoom};
 use uuid::Uuid;
 
 use super::model::hue::{
-    GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn, RecallSceneAction,
-    RecallSceneBody,
+    GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn, RecallSceneBody,
 };
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
