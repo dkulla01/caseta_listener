@@ -1,0 +1,28 @@
+services:
+  caseta_listener:
+    image: caseta_listener:latest
+    environment:
+      - CASETA_LISTENER_REMOTE_CONFIG_FILE=/etc/caseta_listener/config/remote_configuration.yaml
+      - CASETA_LISTENER_SCENE_CONFIG_FILE=/etc/caseta_listener/config/scene_configuration.yaml
+      - CASETA_LISTENER_AUTH_CONFIGURATION_FILE=/etc/caseta_listener/config/auth_config.yaml
+    configs:
+      - source: remote_configuration
+        target: /etc/caseta_listener/config/remote_configuration.yaml
+      - source: scene_configuration
+        target: /etc/caseta_listener/config/scene_configuration.yaml
+    secrets:
+      - caseta_username
+      - caseta_password
+      - hue_application_key
+  configs:
+    remote_configuration:
+      file: config/remote_configuration.yaml
+    scene_configuration:
+      file: config/scene_configuration.yaml
+  secrets:
+    caseta_username:
+      external: true
+    caseta_password:
+      external: true
+    hue_application_key:
+      external: true

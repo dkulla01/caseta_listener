@@ -1,0 +1,10 @@
+FROM debian:buster-slim
+COPY ["docker/transform_secrets_to_yaml.sh", "."]
+COPY "target/release/caseta_listener" "./"
+
+RUN mkdir -p /etc/caseta_listener/config/
+RUN touch /etc/caseta_listener/config/auth_config.yaml
+ENV CASETA_LISTENER_AUTH_CONFIGURATION_FILE="/etc/caseta_listener/config/auth_config.yaml"
+
+# RUN "./transform_secrets_to_yaml.sh"
+ENTRYPOINT [ "tail", "-f", "/dev/null" ]
