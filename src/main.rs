@@ -18,11 +18,10 @@ use caseta_listener::caseta::message::Message;
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::client::dispatcher::{dispatcher_loop, DeviceActionDispatcher};
 use caseta_listener::client::hue::HueClient;
-use caseta_listener::config::caseta_auth_configuration::get_caseta_auth_configuration;
+use caseta_listener::config::auth_configuration::get_auth_configuration;
 use caseta_listener::config::caseta_remote::{
     get_caseta_remote_configuration, ButtonAction, CasetaRemote, RemoteConfiguration, RemoteId,
 };
-use caseta_listener::config::hue_auth_configuration::get_hue_auth_configuration;
 use caseta_listener::config::scene::{get_room_configurations, HomeConfiguration, Topology};
 
 type RemoteWatcherDb = HashMap<RemoteId, Arc<RemoteWatcher>>;
@@ -43,27 +42,29 @@ async fn main() -> Result<()> {
 
 #[instrument]
 async fn watch_caseta_events() -> Result<()> {
-    let caseta_hub_settings = get_caseta_auth_configuration().unwrap();
+    let auth_configuration = get_auth_configuration().unwrap();
     let caseta_remote_configuration = get_caseta_remote_configuration().unwrap();
     let home_scene_configuration = get_room_configurations().unwrap();
-    let hue_auth_configuration = get_hue_auth_configuration().unwrap();
     let topology = Arc::new(build_topology(
         caseta_remote_configuration,
         home_scene_configuration,
     ));
 
-    let caseta_address = caseta_hub_settings.caseta_host.clone();
-    let port = caseta_hub_settings.caseta_port;
+    let caseta_address = auth_configuration.caseta_host.clone();
+    let port = auth_configuration.caseta_port;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
-    let mut connection = CasetaConnection::new(caseta_hub_settings, &tcp_socket_provider);
+    let mut connection = CasetaConnection::new(
+        auth_configuration.caseta_username,
+        auth_configuration.caseta_password,
+        &tcp_socket_provider,
+    );
     connection.initialize().await?;
 
     let (action_sender, action_receiver) = mpsc::channel(64);
     let mut remote_watchers: RemoteWatcherDb = HashMap::new();
-    let hue_client = HueClient::new(
-        hue_auth_configuration.host,
-        hue_auth_configuration.application_key,
-    );
+    let hue_host = auth_configuration.hue_host;
+    let hue_application_key = auth_configuration.hue_application_key;
+    let hue_client = HueClient::new(hue_host, hue_application_key);
     let dispatcher = Arc::new(DeviceActionDispatcher::new(
         hue_client,
         topology.clone(),
@@ -146,8 +147,10 @@ async fn watch_caseta_events() -> Result<()> {
             }
             Err(CasetaConnectionError::Disconnected) => {
                 info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
+                let auth_configuration = get_auth_configuration().unwrap();
                 connection = CasetaConnection::new(
-                    get_caseta_auth_configuration().unwrap(),
+                    auth_configuration.caseta_username,
+                    auth_configuration.caseta_password,
                     &tcp_socket_provider,
                 );
                 connection.initialize().await?;

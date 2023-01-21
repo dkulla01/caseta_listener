@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  caseta_listener:
+    image: caseta_listener_aarch64:latest
+    environment:
+      - CASETA_LISTENER_REMOTE_CONFIG_FILE=/etc/caseta_listener/config/caseta_remote_configuration.yaml
+      - CASETA_LISTENER_SCENE_CONFIG_FILE=/etc/caseta_listener/config/caseta_listener_scenes.yaml
+      - CASETA_LISTENER_AUTH_CONFIGURATION_FILE=/etc/caseta_listener/config/auth_configuration.yaml
+      - CASETA_LISTENER_NON_SENSITIVE_CONFIGURATION_FILE=/etc/caseta_listener/config/non_sensitive_configuration.yaml
+    configs:
+      - source: caseta_remote_configuration
+        target: /etc/caseta_listener/config/caseta_remote_configuration.yaml
+      - source: caseta_listener_scenes
+        target: /etc/caseta_listener/config/caseta_listener_scenes.yaml
+      - source: caseta_listener_non_sensitive_configuration
+        target: /etc/caseta_listener/config/non_sensitive_configuration.yaml
+    secrets:
+      - caseta_username
+      - caseta_password
+      - hue_application_key
+    logging:
+      driver: "local"
+      options:
+        max-size: "10m"
+        max-file: "5"
+configs:
+  caseta_remote_configuration:
+    file: config/caseta_remote_configuration.yaml
+  caseta_listener_scenes:
+    file: config/caseta_listener_scenes.yaml
+  caseta_listener_non_sensitive_configuration:
+    file: config/caseta_listener_non_sensitive_configuration.yaml
+secrets:
+  caseta_username:
+    external: true
+  caseta_password:
+    external: true
+  hue_application_key:
+    external: true
