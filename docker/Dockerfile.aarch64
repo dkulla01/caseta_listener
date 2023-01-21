@@ -1,9 +1,9 @@
 FROM debian:buster-slim
 COPY ["docker/transform_secrets_to_yaml.sh", "."]
+COPY ["docker/entrypoint.sh", "."]
 COPY "target/aarch64-unknown-linux-gnu/release/caseta_listener" "./"
 
 RUN mkdir  -p /etc/caseta_listener/config/
-RUN touch /etc/caseta_listener/config/auth_config.yaml
 
-RUN ./transform_secrets_to_yaml.sh
+ENTRYPOINT [ "./entrypoint.sh" ]
 CMD [ "./caseta_listener" ]
