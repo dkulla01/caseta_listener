@@ -8,13 +8,16 @@ _I just want guests to have as much fun with my philips hue lights as I do._
 
 ## How do you run it?
 
-### _step zero: DHCP reservations/dns_ 
-Make sure your router doesn't move things around on you. Add DHCP reservations for your Caseta PRO hub, your Philips Hue hub, and any other smart devices you plan to control. If you have a dns server running, consider adding DNS entries like `philipshue.run` to make future configuration easier.
+### _step zero: DHCP reservations/dns_
+
+Make sure your router doesn't move things around on you. Add DHCP reservations for your Caseta PRO hub, your Philips Hue hub, and any other smart devices you plan to control. If you have a DNS server running, consider adding DNS entries like `philipshue.run` to make future configuration easier.
 
 ### _step one: build scene configuration files_
+
 [smart_light_finder](https://github.com/dkulla01/smart_light_finder) has a collection of scripts to sniff out the scenes you have configured in your home. Follow the instructions there and save the `build_home_configuration` output.
 
 ### _step two: add configuration_
+
 You need several configuration files to run this project, and you'll need environment files specifying their locations:
 
 - `CASETA_LISTENER_REMOTE_CONFIG_FILE`: a file listing remotes with their ID, name, and type
@@ -30,8 +33,8 @@ Consider setting the `RUST_LOG` env variable to `DEBUG` or `TRACE` while develop
 
 Build the project with `cargo build` and run it with `cargo run`. Then push some buttons on your caseta remotes and see what happens.
 
-
 ### _step four: build docker images and run_
+
 This project was designed to run in docker on a raspberry pi. We need a few things to make that happen:
 
 - Build an artifact to run on aarch64 linux. You need to use the (fantastic!) [cross-rs/cross project](https://github.com/cross-rs/cross) to cross compile to that target. Install cross and then run
