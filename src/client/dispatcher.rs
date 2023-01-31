@@ -400,7 +400,7 @@ impl DeviceActionDispatcher {
     }
 }
 
-#[instrument(skip(dispatcher))]
+#[instrument(skip(dispatcher, action_receiver))]
 pub async fn dispatcher_loop(
     dispatcher: Arc<DeviceActionDispatcher>,
     mut action_receiver: Receiver<DeviceActionMessage>,

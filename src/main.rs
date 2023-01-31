@@ -80,9 +80,15 @@ async fn watch_caseta_events() -> Result<()> {
                 button_action,
             }) => {
                 let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
-                let (_remote, room) = topology.get(&remote_id).expect(
-                    format!("there must be configuration for this remote {}", remote_id).as_str(),
-                );
+                let room_configuration = topology.get(&remote_id);
+                if let None = room_configuration {
+                    info!(
+                        "ignoring unconfigured remote {{id: {}: button_action: {}}}",
+                        remote_id, button_action
+                    );
+                    continue;
+                }
+                let (_remote, room) = room_configuration.unwrap();
                 debug!(
                     remote_id=%remote_id,
                     button_id=%button_id,
