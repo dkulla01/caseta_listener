@@ -9,7 +9,7 @@ _I just want guests to have as much fun with my philips hue lights as I do._
 ## How do you run it?
 
 ### _step zero: DHCP reservations/dns_ 
-Make sure your router doesn't move things around on you. add DHCP reservations for your Caseta PRO hub, your Philips Hue hub, and any other smart devices you plan to control. If you have a dns server running, consider adding DNS entries like `philipshue.run` to make future configuration easier.
+Make sure your router doesn't move things around on you. Add DHCP reservations for your Caseta PRO hub, your Philips Hue hub, and any other smart devices you plan to control. If you have a dns server running, consider adding DNS entries like `philipshue.run` to make future configuration easier.
 
 ### _step one: build scene configuration files_
 [smart_light_finder](https://github.com/dkulla01/smart_light_finder) has a collection of scripts to sniff out the scenes you have configured in your home. Follow the instructions there and save the `build_home_configuration` output.
