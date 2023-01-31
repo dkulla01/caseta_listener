@@ -8,7 +8,7 @@ _I just want guests to have as much fun with my philips hue lights as I do._
 
 ## How do you run it?
 
-### _step zero: DHCP reservations/dns_
+### _step zero: DHCP reservations/DNS_
 
 Make sure your router doesn't move things around on you. Add DHCP reservations for your Caseta PRO hub, your Philips Hue hub, and any other smart devices you plan to control. If you have a DNS server running, consider adding DNS entries like `philipshue.run` to make future configuration easier.
 
