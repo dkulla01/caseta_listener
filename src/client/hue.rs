@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Ok, Result};
 use log::error;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Url};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, instrument};
 use url::Host;
 
@@ -10,7 +10,8 @@ use crate::client::model::hue::{HueResponse, HueRoom};
 use uuid::Uuid;
 
 use super::model::hue::{
-    GroupedLight, GroupedLightPutBody, LightGroupDimming, LightGroupOn, RecallSceneBody,
+    GroupedLight, GroupedLightPutBody, HueLight, HueReference, LightGroupDimming, LightGroupOn,
+    RecallSceneBody,
 };
 
 const HUE_AUTH_KEY_HEADER: &str = "hue-application-key";
@@ -73,6 +74,61 @@ impl HueClient {
         });
         Ok(rooms_by_id)
     }
+
+    pub async fn get_room(&self, room_id: Uuid) -> Result<Option<HueRoom>> {
+        let url = self
+            .base_url
+            .join("room")?
+            .join(room_id.to_string().as_str())?;
+
+        let response = self.http_client.get(url).send().await?;
+        let deserialized_response = response.json::<HueResponse<HueRoom>>().await?;
+        Ok(deserialized_response.data.first().cloned())
+    }
+
+    pub async fn get_all_lights(&self) -> Result<HueResponse<HueLight>> {
+        let url = self
+            .base_url
+            .join("light")
+            .expect("this should always be a well formed URL");
+        let response = self.http_client.get(url).send().await?;
+        response
+            .json::<HueResponse<HueLight>>()
+            .await
+            .map_err(|e| anyhow!(e))
+    }
+
+    pub async fn get_lights_in_room(&self, room_id: Uuid) -> Result<Vec<HueLight>> {
+        let room = self
+            .get_room(room_id)
+            .await?
+            .expect(format!("there was no room with ID: {}", room_id).as_str());
+
+        let device_ids: HashSet<Uuid> = room
+            .children
+            .into_iter()
+            .filter_map(|child| match child {
+                HueReference::Device(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+
+        let lights_in_this_room: Vec<HueLight> = self
+            .get_all_lights()
+            .await?
+            .data
+            .into_iter()
+            .filter(|light| {
+                if let HueReference::Device(id) = light.owner {
+                    return device_ids.contains(&id);
+                }
+                false
+            })
+            .collect();
+        Ok(lights_in_this_room)
+    }
+
+    // pub async fn get_devices(room_id: Uuid)
 
     fn build_grouped_light_url(&self, grouped_light_room_id: Uuid) -> Url {
         self.base_url

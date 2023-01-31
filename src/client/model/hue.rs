@@ -1,3 +1,4 @@
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -98,6 +99,25 @@ pub struct HueRoom {
     pub children: Vec<HueReference>,
     pub services: Vec<HueReference>,
     pub metadata: HueObjectMetadata,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HueLight {
+    pub id: Uuid,
+    pub owner: HueReference, // this will always be HueReference::Device
+    pub color: Option<Color>,
+    pub on: LightGroupOn,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Color {
+    pub xy: XyColor,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct XyColor {
+    pub x: OrderedFloat<f32>,
+    pub y: OrderedFloat<f32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
