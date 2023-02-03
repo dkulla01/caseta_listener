@@ -12,7 +12,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
 use caseta_listener::caseta::connection::{
-    CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider,
+    CasetaConnectionError, CasetaConnectionManager, DefaultTcpSocketProvider,
 };
 use caseta_listener::caseta::message::Message;
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
@@ -53,7 +53,7 @@ async fn watch_caseta_events() -> Result<()> {
     let caseta_address = auth_configuration.caseta_host.clone();
     let port = auth_configuration.caseta_port;
     let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
-    let mut connection = CasetaConnection::new(
+    let mut connection = CasetaConnectionManager::new(
         auth_configuration.caseta_username,
         auth_configuration.caseta_password,
         &tcp_socket_provider,
@@ -154,12 +154,11 @@ async fn watch_caseta_events() -> Result<()> {
             Err(CasetaConnectionError::Disconnected) => {
                 info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
                 let auth_configuration = get_auth_configuration().unwrap();
-                connection = CasetaConnection::new(
+                connection = CasetaConnectionManager::new(
                     auth_configuration.caseta_username,
                     auth_configuration.caseta_password,
-                    &tcp_socket_provider,
                 );
-                connection.initialize().await?;
+                connection.initialize(&tcp_socket_provider).await?;
             }
             Err(other_caseta_connection_err) => {
                 error!(caseta_connection_error=%other_caseta_connection_err, "there was a problem with the caseta connection");

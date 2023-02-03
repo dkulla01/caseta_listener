@@ -9,10 +9,13 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::time;
 use tracing::{debug, error, instrument, trace, warn};
 use url::Host;
 
 use crate::caseta::message::Message;
+
+const KEEP_ALIVE_INTERVAL_DURATION: Duration = Duration::from_secs(60);
 
 #[derive(Error, Debug)]
 pub enum CasetaConnectionError {
@@ -77,8 +80,7 @@ impl TcpSocketProvider for DefaultTcpSocketProvider {
     }
 }
 
-pub struct CasetaConnection<'a> {
-    tcp_socket_provider: &'a (dyn TcpSocketProvider + 'a),
+pub struct CasetaConnectionManager {
     caseta_username: String,
     caseta_password: String,
     stream: Option<BufWriter<TcpStream>>,
@@ -87,21 +89,16 @@ pub struct CasetaConnection<'a> {
     disconnect_receiver: mpsc::Receiver<DisconnectCommand>,
 }
 
-impl Debug for CasetaConnection<'_> {
+impl Debug for CasetaConnectionManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CasetaConnection").finish()
     }
 }
 
-impl<'a> CasetaConnection<'a> {
-    pub fn new(
-        caseta_username: String,
-        caseta_password: String,
-        tcp_socket_provider: &'a dyn TcpSocketProvider,
-    ) -> CasetaConnection<'a> {
+impl CasetaConnectionManager {
+    pub fn new(caseta_username: String, caseta_password: String) -> CasetaConnectionManager {
         let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
-        CasetaConnection {
-            tcp_socket_provider,
+        CasetaConnectionManager {
             caseta_username,
             caseta_password,
             stream: Option::None,
@@ -235,8 +232,22 @@ impl<'a> CasetaConnection<'a> {
         }
     }
 
-    pub async fn initialize(&mut self) -> Result<(), CasetaConnectionError> {
-        let tcp_stream = self.tcp_socket_provider.new_socket().await;
+    async fn maintain_socket(&self) {
+        tokio::task::spawn(async {
+            let mut interval = time::interval(Duration::from_secs(60));
+
+            loop {
+                interval.tick().await;
+                self.write_keep_alive_message().await;
+            }
+        });
+    }
+
+    pub async fn initialize(
+        &mut self,
+        tcp_socket_provider: &'a dyn TcpSocketProvider,
+    ) -> Result<(), CasetaConnectionError> {
+        let tcp_stream = tcp_socket_provider.new_socket().await;
 
         match tcp_stream {
             Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
