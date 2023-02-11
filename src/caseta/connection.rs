@@ -1,55 +1,23 @@
-use std::fmt::{Debug, Formatter};
-use std::io;
-use std::str::FromStr;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
+use anyhow::bail;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio::time;
-use tracing::{debug, error, instrument, trace, warn};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    net::TcpStream,
+    sync::mpsc,
+    time,
+};
+use tracing::{debug, error, info};
 use url::Host;
 
-use crate::caseta::message::Message;
-
-const KEEP_ALIVE_INTERVAL_DURATION: Duration = Duration::from_secs(60);
-
-#[derive(Error, Debug)]
-pub enum CasetaConnectionError {
-    #[error("unable to connect to address")]
-    BadAddress,
-    #[error("there was a problem authenticating with the caseta hub")]
-    Authentication,
-    #[error("the connection to the caseta hub was disconnected")]
-    Disconnected,
-    #[error("got an empty message when we expected a message with content")]
-    EmptyMessage,
-    #[error("encountered an error initializing connection to the caseta hub")]
-    Initialization,
-    #[error("this connection has not been initialized yet")]
-    Uninitialized,
-    #[error("encountered a problem reading/writing messages with caseta")]
-    ReadWriteIo(#[from] io::Error),
-    #[error("timed out connecting to the caseta hub")]
-    ConnectTimeout,
-    #[error("encountered a problem writing the keepalive message")]
-    KeepAlive,
-    #[error("Encountered an unknown error: {0}")]
-    Unknown(String),
-}
-
-#[derive(Debug)]
-struct DisconnectCommand {
-    message: String,
-    cause: CasetaConnectionError,
-}
+use super::message::Message;
 
 #[async_trait]
 pub trait TcpSocketProvider {
-    async fn new_socket(&self) -> Result<TcpStream, CasetaConnectionError>;
+    async fn new_socket(&self) -> Result<TcpStream, anyhow::Error>;
 }
 
 pub struct DefaultTcpSocketProvider {
@@ -65,7 +33,7 @@ impl DefaultTcpSocketProvider {
 
 #[async_trait]
 impl TcpSocketProvider for DefaultTcpSocketProvider {
-    async fn new_socket(&self) -> Result<TcpStream, CasetaConnectionError> {
+    async fn new_socket(&self) -> Result<TcpStream, anyhow::Error> {
         let connection = tokio::time::timeout(
             Duration::from_secs(10),
             TcpStream::connect((self.address.to_string(), self.port)),
@@ -74,226 +42,65 @@ impl TcpSocketProvider for DefaultTcpSocketProvider {
 
         match connection {
             Ok(Ok(tcp_stream)) => Ok(tcp_stream),
-            Ok(Err(e)) => Err(CasetaConnectionError::ReadWriteIo(e)),
-            Err(_elapsed) => Err(CasetaConnectionError::ConnectTimeout),
+            Ok(Err(e)) => bail!("unable to connect"),
+            Err(_elapsed) => bail!("timed out trying to connect"),
         }
     }
+}
+
+#[async_trait]
+pub trait ReadOnlyConnection {
+    async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError>;
+}
+
+#[async_trait]
+pub trait ReadWriteConnection {
+    async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError>;
+    async fn write_message(&mut self, message: String) -> Result<(), ConnectionManagerError>;
+    async fn write_keep_alive_message(&mut self) -> Result<(), ConnectionManagerError>;
+}
+
+#[derive(Error, Debug)]
+pub enum ConnectionManagerError {
+    #[error("received an empty message")]
+    EmptyMessageError,
+    #[error("the caseta connection is no longer live")]
+    LivenessError,
+    #[error("encountered an error: {0}, the underlying connection should be refreshed.")]
+    RecoverableError(String),
+    #[error("encountered an unrecoverable error: {0}")]
+    UnrecoverableError(String),
 }
 
 pub struct CasetaConnectionManager {
-    caseta_username: String,
-    caseta_password: String,
-    stream: Option<BufWriter<TcpStream>>,
-    logged_in: bool,
-    disconnect_sender: mpsc::Sender<DisconnectCommand>,
-    disconnect_receiver: mpsc::Receiver<DisconnectCommand>,
+    connection: Option<BufWriter<TcpStream>>,
+    disconnect_sender: mpsc::Sender<()>,
+    disconnect_receiver: mpsc::Receiver<()>,
 }
 
-impl Debug for CasetaConnectionManager {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CasetaConnection").finish()
-    }
-}
-
-impl CasetaConnectionManager {
-    pub fn new(caseta_username: String, caseta_password: String) -> CasetaConnectionManager {
-        let (disconnect_sender, disconnect_receiver) = mpsc::channel(64);
-        CasetaConnectionManager {
-            caseta_username,
-            caseta_password,
-            stream: Option::None,
-            logged_in: false,
-            disconnect_sender,
-            disconnect_receiver,
-        }
+#[async_trait]
+impl ReadWriteConnection for CasetaConnectionManager {
+    async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError> {
+        self.read_frame().await
     }
 
-    #[instrument(level = "trace")]
-    async fn read_frame(&mut self) -> Result<Option<Message>, CasetaConnectionError> {
-        let stream = match self.stream {
+    async fn write_message(&mut self, message: String) -> Result<(), ConnectionManagerError> {
+        let stream = match self.connection {
             Some(ref mut buf_writer) => buf_writer,
-            None => return Err(CasetaConnectionError::Uninitialized),
-        };
-
-        let mut buffer = BytesMut::with_capacity(128);
-        let ref mut disconnect_recv = self.disconnect_receiver;
-
-        let stream_read_future = stream.read_buf(&mut buffer);
-        let disconnect_recv_future = disconnect_recv.recv();
-        tokio::select! {
-            read_result = stream_read_future => {
-                let num_bytes_read = read_result.expect("there was a problem reading the buffer");
-                if num_bytes_read == 0 {
-                    if buffer.is_empty() {
-                        return Ok(None)
-                    } else {
-                        return Err(CasetaConnectionError::EmptyMessage);
-                    }
-                }
-                let contents = std::str::from_utf8(&buffer[..]).expect("got unparseable content");
-                let message = Message::from_str(contents).expect(format!("expected a valid message but got {}", contents).as_str());
-                debug!("got remote message {}", message);
-                return Ok(Some(message))
+            None => {
+                return Err(ConnectionManagerError::UnrecoverableError(
+                    "Write was called before the connection was initialized. this is a bug"
+                        .to_string(),
+                ))
             }
-            disconnect_command = disconnect_recv_future => {
-                match disconnect_command {
-                    Some(DisconnectCommand{cause, message}) => {
-                        error!(
-                            cause=%cause,
-                            message=message.as_str(),
-                            "encountered an error communicating with the caseta hub"
-                        );
-                        Err(cause)
-                    }
-                    _ => Err(CasetaConnectionError::Unknown("there was an issue waiting on the the disconnect channel".into()))
-                }
-            }
-        }
-    }
-
-    #[instrument]
-    async fn log_in(&mut self) -> Result<(), CasetaConnectionError> {
-        if self.logged_in {
-            return Ok(());
-        }
-
-        let contents = self.read_frame().await;
-        match contents {
-            Ok(Some(Message::LoginPrompt)) => trace!("received the login prompt"),
-            Ok(Some(unexpected_message)) => {
-                error!("got a weird random message: {:?}", unexpected_message);
-                return Err(CasetaConnectionError::Initialization);
-            }
-            Ok(None) => {
-                error!("got an empty message");
-                return Err(CasetaConnectionError::Initialization);
-            }
-            Err(e) => {
-                error!("got an error: {:?}", e);
-            }
-        }
-        self.write(format!("{}\r\n", self.caseta_username).as_str())
-            .await?;
-        let contents = self.read_frame().await;
-        match contents {
-            Ok(Some(Message::PasswordPrompt)) => trace!("got password prompt"),
-            Ok(Some(unexpected_message)) => {
-                error!("got a weird random message: {:?}", unexpected_message);
-                return Err(CasetaConnectionError::Authentication);
-            }
-            Ok(None) => {
-                error!("got an empty message");
-                return Err(CasetaConnectionError::Authentication);
-            }
-            Err(e) => {
-                error!("got an error: {:?}", e);
-            }
-        }
-        if let Ok(()) = self
-            .write(format!("{}\r\n", self.caseta_password).as_str())
-            .await
-        {
-        } else {
-            error!("got an error logging in");
-            return Err(CasetaConnectionError::Authentication);
-        }
-
-        let contents = self.read_frame().await;
-
-        match contents {
-            Ok(Some(Message::LoggedIn)) => {
-                self.logged_in = true;
-                return Ok(());
-            }
-            Ok(Some(other_message)) => {
-                error!(received_message=%other_message, "expected GNET> message, but got {}", other_message);
-                Err(CasetaConnectionError::Authentication)
-            }
-            _ => Err(CasetaConnectionError::Authentication),
-        }
-    }
-
-    #[instrument(level = "debug")]
-    async fn write_keep_alive_message(&mut self) -> Result<(), CasetaConnectionError> {
-        let write_result = self.write("\r\n").await;
-        match write_result {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                warn!(error=%e, "unable to write the keepalive message. was the caseta connection closed?");
-                self.disconnect_sender
-                    .send(DisconnectCommand {
-                        message: "there was a problem writing the keepalive message".into(),
-                        cause: CasetaConnectionError::KeepAlive,
-                    })
-                    .await
-                    .expect("unrecoverable error");
-                Ok(())
-            }
-        }
-    }
-
-    async fn maintain_socket(&self) {
-        tokio::task::spawn(async {
-            let mut interval = time::interval(Duration::from_secs(60));
-
-            loop {
-                interval.tick().await;
-                self.write_keep_alive_message().await;
-            }
-        });
-    }
-
-    pub async fn initialize(
-        &mut self,
-        tcp_socket_provider: &'a dyn TcpSocketProvider,
-    ) -> Result<(), CasetaConnectionError> {
-        let tcp_stream = tcp_socket_provider.new_socket().await;
-
-        match tcp_stream {
-            Ok(stream) => self.stream = Option::Some(BufWriter::new(stream)),
-            Err(e) => {
-                // print the error
-                error!(error=%e, "unable to initialize the caseta connection. is the address legit?");
-                return Err(CasetaConnectionError::BadAddress);
-            }
-        }
-        self.log_in().await
-    }
-
-    pub async fn await_message(&mut self) -> Result<Message, CasetaConnectionError> {
-        let message = self.read_frame().await;
-        match message {
-            Ok(Some(content)) => Ok(content),
-            Ok(None) => Err(CasetaConnectionError::Disconnected),
-            Err(CasetaConnectionError::KeepAlive) => {
-                warn!("there was an issue writing the keepalive message...");
-                Err(CasetaConnectionError::Disconnected)
-            }
-            Err(CasetaConnectionError::EmptyMessage) => {
-                warn!(
-                    "got an empty message from the socket. Is the caseta connection disconnected?"
-                );
-                Err(CasetaConnectionError::Disconnected)
-            }
-            Err(err) => {
-                error!(error=%err);
-                Err(err)
-            }
-        }
-    }
-
-    pub async fn write(&mut self, message: &str) -> Result<(), CasetaConnectionError> {
-        let stream = match self.stream {
-            Some(ref mut buf_writer) => buf_writer,
-            None => return Err(CasetaConnectionError::Uninitialized),
         };
         let outcome = stream.write(message.as_bytes()).await;
 
         match outcome {
             Ok(_) => {}
             Err(e) => {
-                error!(error=%e, "couldn't flush the socket read/write buffer");
-                return Err(CasetaConnectionError::ReadWriteIo(e));
+                error!(error=%e, "couldn't write the socket read/write buffer");
+                return Err(ConnectionManagerError::UnrecoverableError(format!("unable to write the socket read/write buffer. was the connection closed?, error: {}", e)));
             }
         }
 
@@ -302,7 +109,303 @@ impl CasetaConnectionManager {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!(error=%e, "couldn't flush the socket read/write buffer");
-                Err(CasetaConnectionError::ReadWriteIo(e))
+                Err(ConnectionManagerError::UnrecoverableError(format!("couldn't flush the socket read/write buffer. was the connection closed? error: {}", e)))
+            }
+        }
+    }
+
+    async fn write_keep_alive_message(&mut self) -> Result<(), ConnectionManagerError> {
+        let write_result = self.write_message("\r\n".to_string()).await;
+        return match write_result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                info!(
+                    "unable to write keep alive message to caseta. Is the connection closed? {}",
+                    e
+                );
+                self.disconnect_sender.send(()).await.map_err(|send_error| {
+                    ConnectionManagerError::UnrecoverableError(format!(
+                        "unable to send disconnect message. original error: {}, send error: {}",
+                        e, send_error
+                    ))
+                })
+            }
+        };
+    }
+}
+
+impl CasetaConnectionManager {
+    fn new() -> Self {
+        // this should only handle a single disconnect message in the connection manager's lifetime,
+        // so a buffer size of one message is sufficient.
+        let (sender, receiver) = mpsc::channel(1);
+        Self {
+            connection: Option::None,
+            disconnect_sender: sender,
+            disconnect_receiver: receiver,
+        }
+    }
+
+    async fn read_frame(&mut self) -> Result<Option<Message>, ConnectionManagerError> {
+        let stream = match self.connection {
+            Some(ref mut buf_writer) => buf_writer,
+            None => {
+                return Err(ConnectionManagerError::UnrecoverableError(
+                    "connection is not initialized. this is a bug".to_string(),
+                ))
+            }
+        };
+
+        let mut buffer = BytesMut::with_capacity(128);
+        let stream_read_future = stream.read_buf(&mut buffer);
+
+        tokio::select! {
+            _disconnect_message = self.disconnect_receiver.recv() => {
+                info!("The connection to the caseta hub is no longer alive");
+                return Err(ConnectionManagerError::LivenessError)
+            },
+            read_result = stream_read_future => {
+                let num_bytes_read = read_result.expect("there was a problem reading the buffer");
+                if num_bytes_read == 0 {
+                    if buffer.is_empty() {
+                        return Ok(None)
+                    } else {
+                        // todo: not sure if this is appropriate here. maybe this is a
+                        // recoverable error (aka one where we should just kill this connection
+                        // and replace it with a new one)
+                        return Err(ConnectionManagerError::EmptyMessageError);
+                    }
+                }
+
+                let contents = match std::str::from_utf8(&buffer[..]) {
+                    Ok(parsed_buffer) => parsed_buffer,
+                    Err(e) => return Err(
+                        ConnectionManagerError::UnrecoverableError(
+                            format!("got unparsable contents, buffer bytes cannot be parsed from utf-8 into String: {}", e)
+                        )
+                    )
+                };
+                return match Message::from_str(contents) {
+                    Ok(message) => Ok(Some(message)),
+                    Err(e) => Err(ConnectionManagerError::UnrecoverableError(
+                        format!("got an unparsable message. message from Caseta cannot be parsed into a Message object: {}", e)))
+                }
+            }
+        }
+    }
+
+    async fn initialize(
+        &mut self,
+        caseta_username: &str,
+        caseta_password: &str,
+        caseta_host: &Host<String>,
+        caseta_port: u16,
+        tcp_stream: TcpStream,
+    ) -> Result<(), ConnectionManagerError> {
+        self.connection = Option::Some(BufWriter::new(tcp_stream));
+        self.log_in(caseta_username, caseta_password).await
+    }
+
+    async fn log_in(
+        &mut self,
+        caseta_username: &str,
+        caseta_password: &str,
+    ) -> Result<(), ConnectionManagerError> {
+        Self::ensure_expected_message(Message::LoginPrompt, self.read_frame().await)?;
+
+        self.write_message(format!("{}\r\n", caseta_username))
+            .await?;
+
+        Self::ensure_expected_message(Message::PasswordPrompt, self.read_frame().await)?;
+        self.write_message(format!("{}\r\n", caseta_password))
+            .await?;
+        Self::ensure_expected_message(Message::LoggedIn, self.read_frame().await)?;
+        Ok(())
+    }
+
+    fn ensure_expected_message(
+        expected_message: Message,
+        actual_message: Result<Option<Message>, ConnectionManagerError>,
+    ) -> Result<(), ConnectionManagerError> {
+        match actual_message {
+            Ok(Some(message)) => {
+                if (message == expected_message) {
+                    debug!("received the expected message: {}", expected_message);
+                    return Ok(());
+                }
+                error!("got an unexpected message: {}", message);
+                return Err(ConnectionManagerError::UnrecoverableError(format!(
+                    "unexpected message: {}",
+                    message
+                )));
+            }
+            Ok(None) => {
+                error!("got an empty message we did not expect");
+                return Err(ConnectionManagerError::UnrecoverableError(
+                    "unexpected empty message".to_string(),
+                ));
+            }
+            Err(e) => {
+                error!("got an error: {}", e);
+                return Err(ConnectionManagerError::UnrecoverableError(format!(
+                    "got an unexpected error: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    // async fn socket_liveness_checker_loop(&mut self) -> () {
+    //     loop {
+    //         let mut interval = time::interval(Duration::from_secs(60));
+    //         interval.tick().await;
+    //         let result = self.write_keep_alive_message().await;
+    //         match result {
+    //             Ok(_) => {}
+    //             Err(e) => {
+    //                 error!("the connection manager disconnected, but we were unable to send a message for this disconnection. this is a bug. {}", e);
+    //                 panic!("the connection manager disconnect, but we were unable to send a message for this disconnection. this is a bug. error: {}", e)
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+#[async_trait]
+pub trait CasetaConnectionProvider {
+    async fn new_connection(
+        &mut self,
+    ) -> Result<Box<dyn ReadWriteConnection + Send + Sync>, ConnectionManagerError>;
+}
+
+pub struct DefaultCasetaConnectionProvider {
+    host: Host<String>,
+    port: u16,
+    username: String,
+    password: String,
+    tcp_socket_provider: Box<dyn TcpSocketProvider + Send + Sync>,
+}
+
+impl DefaultCasetaConnectionProvider {
+    pub fn new(
+        host: Host<String>,
+        port: u16,
+        username: String,
+        password: String,
+        tcp_socket_provider: Box<dyn TcpSocketProvider + Send + Sync>,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            username,
+            password,
+            tcp_socket_provider,
+        }
+    }
+}
+
+#[async_trait]
+impl CasetaConnectionProvider for DefaultCasetaConnectionProvider {
+    async fn new_connection(
+        &mut self,
+    ) -> Result<Box<dyn ReadWriteConnection + Send + Sync>, ConnectionManagerError> {
+        let mut connection = CasetaConnectionManager::new();
+        let tcp_stream = self.tcp_socket_provider.new_socket().await;
+
+        if let Err(e) = tcp_stream {
+            return Err(ConnectionManagerError::UnrecoverableError(format!(
+                "there was a problem getting a tcp connection to the caseta hub: {}",
+                e
+            )));
+        }
+
+        connection
+            .initialize(
+                &self.username,
+                &self.password,
+                &self.host,
+                self.port,
+                tcp_stream.unwrap(),
+            )
+            .await?;
+
+        // tokio::spawn(connection.socket_liveness_checker_loop());
+        Ok(Box::new(connection))
+    }
+}
+
+pub struct DelegatingCasetaConnectionManager {
+    internal_connection_manager: Option<Box<dyn ReadWriteConnection + Send + Sync>>,
+    caseta_connection_provider: Box<dyn CasetaConnectionProvider + Send + Sync>,
+}
+
+#[async_trait]
+impl ReadOnlyConnection for DelegatingCasetaConnectionManager {
+    async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError> {
+        match self.internal_connection_manager {
+            Some(_) => {}
+            None => {
+                let new_connection = self.caseta_connection_provider.new_connection().await;
+                if let Err(e) = new_connection {
+                    return Err(ConnectionManagerError::UnrecoverableError(format!(
+                        "there was a problem creating a new caseta connection: {}",
+                        e
+                    )));
+                }
+                tokio::spawn(self.socket_liveness_checker_loop());
+                self.internal_connection_manager = new_connection.ok();
+            }
+        }
+
+        let next_message = self
+            .internal_connection_manager
+            .as_mut()
+            .expect("we have checked that the connection exists. this is a bug")
+            .await_message()
+            .await;
+        match next_message {
+            Ok(Some(message)) => Ok(Some(message)),
+            Ok(None) | Err(ConnectionManagerError::LivenessError) => {
+                // swap in a new connection here
+                //return a liveness error
+                self.internal_connection_manager = Option::None;
+                Err(ConnectionManagerError::LivenessError)
+            }
+            Err(e) => Err(ConnectionManagerError::UnrecoverableError(format!(
+                "encountered an unexpected and unrecoverable error: {}",
+                e
+            ))),
+        }
+    }
+}
+
+impl DelegatingCasetaConnectionManager {
+    pub fn new(
+        caseta_connection_provider: Box<dyn CasetaConnectionProvider + Send + Sync>,
+    ) -> Self {
+        Self {
+            internal_connection_manager: Option::None,
+            caseta_connection_provider: caseta_connection_provider,
+        }
+    }
+
+    async fn socket_liveness_checker_loop(&mut self) -> () {
+        loop {
+
+            match &mut self.internal_connection_manager {
+                None => return,
+                Some(connection) => {
+                    let mut interval = time::interval(Duration::from_secs(60));
+                    interval.tick().await;
+                    let result = connection.write_keep_alive_message().await;
+                    match result {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("the connection manager disconnected, but we were unable to send a message for this disconnection. this is a bug. {}", e);
+                            panic!("the connection manager disconnect, but we were unable to send a message for this disconnection. this is a bug. error: {}", e)
+                        }
+                    } 
+                }
             }
         }
     }

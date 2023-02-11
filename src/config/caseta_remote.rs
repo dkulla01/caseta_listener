@@ -38,7 +38,7 @@ impl TryFrom<u8> for ButtonId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ButtonAction {
     Press,
     Release,

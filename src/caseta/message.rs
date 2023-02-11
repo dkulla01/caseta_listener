@@ -2,7 +2,7 @@ use crate::config::caseta_remote::{ButtonAction, ButtonId, RemoteId};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Message {
     ButtonEvent {
         remote_id: RemoteId,
