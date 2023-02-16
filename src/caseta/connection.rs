@@ -425,8 +425,7 @@ impl ReadOnlyConnection for DelegatingCasetaConnectionManager {
                         },
                         Ok(Some(message)) => return Ok(Some(message)),
                         Ok(None) | Err(ConnectionManagerError::LivenessError) => {
-                            // swap in a new connection here
-                            //return a liveness error
+                            // liveness errors mean the delegate connection is dead. drop the delegate connection so we can replace it.
                             info!("the existing caseta connection is no longer valid. Replacing it with an empty option to trigger reconnection");
                             self.connection_manager = Option::None;
                             continue;
