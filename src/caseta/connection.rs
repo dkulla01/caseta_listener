@@ -13,16 +13,17 @@ use tokio::{
     sync::mpsc,
     time,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 use url::Host;
 
 use super::message::Message;
 
 #[async_trait]
-pub trait TcpSocketProvider {
+pub trait TcpSocketProvider: std::fmt::Debug {
     async fn new_socket(&self) -> Result<TcpStream, anyhow::Error>;
 }
 
+#[derive(Debug)]
 pub struct DefaultTcpSocketProvider {
     address: Host<String>,
     port: u16,
@@ -52,17 +53,17 @@ impl TcpSocketProvider for DefaultTcpSocketProvider {
 }
 
 #[async_trait]
-pub trait ReadOnlyConnection {
+pub trait ReadOnlyConnection: std::fmt::Debug {
     async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError>;
 }
 #[async_trait]
-pub trait WriteOnlyConnection {
+pub trait WriteOnlyConnection: std::fmt::Debug {
     async fn write_message(&mut self, message: String) -> Result<(), ConnectionManagerError>;
     async fn write_keep_alive_message(&mut self) -> Result<(), ConnectionManagerError>;
 }
 
 #[async_trait]
-pub trait ReadWriteConnection {
+pub trait ReadWriteConnection: std::fmt::Debug {
     async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError>;
     async fn write_message(&mut self, message: String) -> Result<(), ConnectionManagerError>;
     async fn write_keep_alive_message(&mut self) -> Result<(), ConnectionManagerError>;
@@ -80,6 +81,7 @@ pub enum ConnectionManagerError {
     UnrecoverableError(String),
 }
 
+#[derive(Debug)]
 pub struct CasetaReadConnectionManager {
     connection: OwnedReadHalf,
     disconnect_receiver: mpsc::Receiver<()>,
@@ -140,6 +142,7 @@ impl ReadOnlyConnection for CasetaReadConnectionManager {
     }
 }
 
+#[derive(Debug)]
 pub struct CasetaWriteConnectionManager {
     connection: OwnedWriteHalf,
     disconnect_sender: mpsc::Sender<()>,
@@ -177,6 +180,7 @@ impl WriteOnlyConnection for CasetaWriteConnectionManager {
         }
     }
 
+    #[instrument(level = "debug")]
     async fn write_keep_alive_message(&mut self) -> Result<(), ConnectionManagerError> {
         let write_result = self.write_message("\r\n".to_string()).await;
         return match write_result {
@@ -197,6 +201,7 @@ impl WriteOnlyConnection for CasetaWriteConnectionManager {
     }
 }
 
+#[derive(Debug)]
 pub struct CasetaConnectionManager {
     connection: Option<(CasetaReadConnectionManager, CasetaWriteConnectionManager)>,
 }
@@ -208,6 +213,7 @@ impl CasetaConnectionManager {
         }
     }
 
+    #[instrument(level = "debug", skip(caseta_username, caseta_password))]
     async fn initialize(
         &mut self,
         caseta_username: &str,
@@ -256,7 +262,7 @@ impl CasetaConnectionManager {
             }
         };
     }
-
+    #[instrument(level = "debug", skip(caseta_username, caseta_password))]
     async fn log_in(
         caseta_username: &str,
         caseta_password: &str,
@@ -264,7 +270,7 @@ impl CasetaConnectionManager {
         caseta_write_half: &mut CasetaWriteConnectionManager,
     ) -> Result<(), ConnectionManagerError> {
         Self::ensure_expected_message(Message::LoginPrompt, caseta_read_half.read_frame().await)?;
-
+        debug!("writing caseta username");
         caseta_write_half
             .write_message(format!("{}\r\n", caseta_username))
             .await?;
@@ -273,6 +279,8 @@ impl CasetaConnectionManager {
             Message::PasswordPrompt,
             caseta_read_half.read_frame().await,
         )?;
+
+        debug!("writing caseta password");
         caseta_write_half
             .write_message(format!("{}\r\n", caseta_password))
             .await?;
@@ -314,7 +322,7 @@ impl CasetaConnectionManager {
 }
 
 #[async_trait]
-pub trait CasetaConnectionProvider {
+pub trait CasetaConnectionProvider: std::fmt::Debug {
     async fn new_connection(
         &mut self,
     ) -> Result<
@@ -326,6 +334,7 @@ pub trait CasetaConnectionProvider {
     >;
 }
 
+#[derive(Debug)]
 pub struct DefaultCasetaConnectionProvider {
     username: String,
     password: String,
@@ -375,21 +384,23 @@ impl CasetaConnectionProvider for DefaultCasetaConnectionProvider {
     }
 }
 
+#[derive(Debug)]
 pub struct DelegatingCasetaConnectionManager {
     connection_manager: Option<(
         Box<dyn ReadOnlyConnection + Send + Sync>,
         Box<dyn WriteOnlyConnection + Send + Sync>,
     )>,
-    // write_connection_manager: Option<Box<dyn WriteOnlyConnection + Send + Sync>>,
     caseta_connection_provider: Box<dyn CasetaConnectionProvider + Send + Sync>,
 }
 
 #[async_trait]
 impl ReadOnlyConnection for DelegatingCasetaConnectionManager {
+    #[instrument(level = "debug", skip(self))]
     async fn await_message(&mut self) -> Result<Option<Message>, ConnectionManagerError> {
         match self.connection_manager {
             Some(_) => {}
             None => {
+                debug!("no delegate caseta connection present. creating a new caseta connection");
                 let new_connection = self.caseta_connection_provider.new_connection().await;
                 if let Err(e) = new_connection {
                     return Err(ConnectionManagerError::UnrecoverableError(format!(
@@ -404,13 +415,19 @@ impl ReadOnlyConnection for DelegatingCasetaConnectionManager {
         loop {
             let connection_manager = self.connection_manager.as_mut().unwrap();
             let (read_connection, write_connection) = connection_manager;
+
             tokio::select! {
                 next_message = read_connection.await_message() => {
                     match next_message {
+                        Ok(Some(Message::LoggedIn)) => {
+                            debug!("got the logged in prompt: {}. in this case, it's a response from the keep alive message", Message::LoggedIn);
+                            continue;
+                        },
                         Ok(Some(message)) => return Ok(Some(message)),
                         Ok(None) | Err(ConnectionManagerError::LivenessError) => {
                             // swap in a new connection here
                             //return a liveness error
+                            info!("the existing caseta connection is no longer valid. Replacing it with an empty option to trigger reconnection");
                             self.connection_manager = Option::None;
                             continue;
                         }
@@ -421,7 +438,8 @@ impl ReadOnlyConnection for DelegatingCasetaConnectionManager {
                     };
                 },
                 keep_alive_result = async {
-                    time::interval(Duration::from_secs(60)).tick().await;
+                    time::sleep(Duration::from_secs(60)).await;
+                    debug!("writing keep alive message");
                     write_connection.write_keep_alive_message().await
                 } => {
                     match keep_alive_result {
