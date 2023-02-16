@@ -2,7 +2,11 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
+use caseta_listener::caseta::connection::{
+    CasetaConnectionProvider, DefaultCasetaConnectionProvider, DefaultTcpSocketProvider,
+    DelegatingCasetaConnectionManager, ReadOnlyConnection,
+};
 use caseta_listener::client::room_state::new_cache;
 use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
@@ -11,9 +15,6 @@ use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-use caseta_listener::caseta::connection::{
-    CasetaConnection, CasetaConnectionError, DefaultTcpSocketProvider,
-};
 use caseta_listener::caseta::message::Message;
 use caseta_listener::caseta::remote::{remote_watcher_loop, RemoteWatcher};
 use caseta_listener::client::dispatcher::{dispatcher_loop, DeviceActionDispatcher};
@@ -52,13 +53,15 @@ async fn watch_caseta_events() -> Result<()> {
 
     let caseta_address = auth_configuration.caseta_host.clone();
     let port = auth_configuration.caseta_port;
-    let tcp_socket_provider = DefaultTcpSocketProvider::new(caseta_address, port);
-    let mut connection = CasetaConnection::new(
+
+    let tcp_socket_provider = Box::new(DefaultTcpSocketProvider::new(caseta_address, port));
+    let connection_manager_provider = DefaultCasetaConnectionProvider::new(
         auth_configuration.caseta_username,
         auth_configuration.caseta_password,
-        &tcp_socket_provider,
+        tcp_socket_provider,
     );
-    connection.initialize().await?;
+    let mut connection =
+        DelegatingCasetaConnectionManager::new(Box::new(connection_manager_provider));
 
     let (action_sender, action_receiver) = mpsc::channel(64);
     let mut remote_watchers: RemoteWatcherDb = HashMap::new();
@@ -74,11 +77,11 @@ async fn watch_caseta_events() -> Result<()> {
     loop {
         let contents = connection.await_message().await;
         match contents {
-            Ok(Message::ButtonEvent {
+            Ok(Some(Message::ButtonEvent {
                 remote_id,
                 button_id,
                 button_action,
-            }) => {
+            })) => {
                 let button_key = format!("{}-{}-{}", remote_id, button_id, button_action);
                 let room_configuration = topology.get(&remote_id);
                 if let None = room_configuration {
@@ -148,24 +151,18 @@ async fn watch_caseta_events() -> Result<()> {
                     }
                 }
             }
-            Ok(unexpected_contents) => {
+            Ok(Some(unexpected_contents)) => {
                 warn!(message_contents=%unexpected_contents, "got an unexpected message type: {}", unexpected_contents)
             }
-            Err(CasetaConnectionError::Disconnected) => {
-                info!("looks like our caseta connection was disconnected, so we're gonna create a new one!");
-                let auth_configuration = get_auth_configuration().unwrap();
-                connection = CasetaConnection::new(
-                    auth_configuration.caseta_username,
-                    auth_configuration.caseta_password,
-                    &tcp_socket_provider,
-                );
-                connection.initialize().await?;
+            Ok(None) => {
+                error!("received an empty message, which shouldn't happen in the main loop");
+                bail!("empty messages shouldn't crop up here");
             }
-            Err(other_caseta_connection_err) => {
-                error!(caseta_connection_error=%other_caseta_connection_err, "there was a problem with the caseta connection");
+            Err(connection_manager_error) => {
+                error!(caseta_connection_error=%connection_manager_error, "there was a problem with the caseta connection");
                 break Err(anyhow!(
                     "there was an issue with the caseta connection {:?} ",
-                    other_caseta_connection_err
+                    connection_manager_error
                 ));
             }
         }

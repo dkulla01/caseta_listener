@@ -3,6 +3,7 @@ use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
 use crate::config::scene::{Device, Room, Scene, Topology};
 use anyhow::{bail, ensure, Ok, Result};
+use log::warn;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
@@ -415,4 +416,6 @@ pub async fn dispatcher_loop(
                 .await
         });
     }
+
+    warn!("exited the dispatcher loop. is the application shutting down?");
 }
