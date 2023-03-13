@@ -1,3 +1,4 @@
+use crate::caseta::message;
 use crate::client::hue::HueClient;
 use crate::client::room_state::CurrentRoomState;
 use crate::config::caseta_remote::{ButtonId, CasetaRemote, RemoteId};
@@ -18,7 +19,7 @@ const BRIGHTNESS_UPDATE_AMOUNT: f32 = 10.0;
 const MAXIMUM_BRIGHTNESS_PERCENT: f32 = 100.0;
 const MINIMUM_BRIGHTNESS_PERCENT: f32 = 1.0;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum DeviceAction {
     SinglePressComplete,
     DoublePressComplete,
@@ -146,6 +147,40 @@ impl DeviceActionDispatcher {
         }
     }
 
+    async fn turn_room_on<'a>(
+        &self,
+        room: &'a Room,
+        current_room_state: &CurrentRoomState,
+    ) -> Result<()> {
+        ensure!(
+            !current_room_state.on,
+            "cannot turn on a room that is already on. this is a bug"
+        );
+
+        let target_scene = current_room_state
+            .scene
+            .as_ref()
+            .or_else(|| Option::Some(Self::get_first_scene(room)))
+            .expect("rooms must have at least one configured scene. this is a bug");
+
+        for device in target_scene.devices.iter() {
+            if let Device::HueScene { id, .. } = device {
+                let _response = self.hue_client.recall_scene(id, Option::None).await?;
+            }
+        }
+
+        let current_light_status = self
+            .hue_client
+            .get_grouped_light(room.grouped_light_room_id)
+            .await?;
+
+        self.cache_current_state(
+            room.room_id,
+            Self::build_cache_entry(Option::Some(target_scene.clone()), &current_light_status),
+        );
+        Ok(())
+    }
+
     async fn handle_power_on_button_press(&self, message: DeviceActionMessage) -> Result<()> {
         ensure!(message.button_id == ButtonId::PowerOn);
         let (remote, room) = self.get_room_configuration(message.remote_id);
@@ -157,35 +192,11 @@ impl DeviceActionDispatcher {
         }
 
         let current_room_state = self.get_current_state(room).await?;
-        let target_scene = current_room_state
-            .scene
-            .as_ref()
-            .or_else(|| Option::Some(Self::get_first_scene(room)))
-            .expect("there must always be at least one scene configured. this is a bug");
 
         match message.device_action {
             DeviceAction::SinglePressComplete => {
                 debug!("got a single press for remote in room {}", room.name);
-                if !current_room_state.on {
-                    for device in target_scene.devices.iter() {
-                        if let Device::HueScene { id, .. } = device {
-                            let _response = self.hue_client.recall_scene(id, Option::None).await?;
-                        }
-                    }
-
-                    let current_light_status = self
-                        .hue_client
-                        .get_grouped_light(room.grouped_light_room_id)
-                        .await?;
-
-                    self.cache_current_state(
-                        room.room_id,
-                        Self::build_cache_entry(
-                            Option::Some(target_scene.clone()),
-                            &current_light_status,
-                        ),
-                    )
-                }
+                return self.turn_room_on(room, &current_room_state).await;
             }
             DeviceAction::DoublePressComplete => {
                 debug!("got a double press for remote in room {}", room.name)
@@ -213,6 +224,12 @@ impl DeviceActionDispatcher {
         }
 
         let current_room_state = self.get_current_state(room).await?;
+
+        if message.device_action == DeviceAction::SinglePressComplete && !current_room_state.on {
+            debug!("room is off, but got a power off single button press, so we're turning the room on");
+            return self.turn_room_on(room, &current_room_state).await;
+        }
+
         match message.device_action {
             DeviceAction::SinglePressComplete
             | DeviceAction::DoublePressComplete
@@ -231,6 +248,11 @@ impl DeviceActionDispatcher {
         ensure!(message.button_id == ButtonId::Up);
         let (_remote, room) = self.get_room_configuration(message.remote_id);
         let current_room_state = self.get_current_state(room).await?;
+
+        if message.device_action == DeviceAction::SinglePressComplete && !current_room_state.on {
+            debug!("room is off, but got an up button single button press, so we're turning the room on");
+            return self.turn_room_on(room, &current_room_state).await;
+        }
 
         if !current_room_state.on {
             // can't increase brightness of a room that's off
@@ -251,6 +273,11 @@ impl DeviceActionDispatcher {
         ensure!(message.button_id == ButtonId::Down);
         let (_remote, room) = self.get_room_configuration(message.remote_id);
         let current_room_state = self.get_current_state(room).await?;
+
+        if message.device_action == DeviceAction::SinglePressComplete && !current_room_state.on {
+            debug!("room is off, but got a down button single button press, so we're turning the room on");
+            return self.turn_room_on(room, &current_room_state).await;
+        }
 
         if !current_room_state.on {
             // can't decrease brightness of a room that's off
@@ -321,6 +348,12 @@ impl DeviceActionDispatcher {
             _ => (),
         }
         let mut current_room_state = self.get_current_state(room).await?;
+
+        if message.device_action == DeviceAction::SinglePressComplete && !current_room_state.on {
+            debug!("room is off, but got a favorite button single button press, so we're turning the room on");
+            return self.turn_room_on(room, &current_room_state).await;
+        }
+
         if !current_room_state.on {
             // don't do anything to the scene if the lights in the room aren't on
             return Ok(());
