@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   caseta_listener:
-    image: caseta_listener_aarch64:latest
+    image: caseta_listener_aarch64:2023-03-15.PR-8
     deploy:
       restart_policy:
         condition: none
