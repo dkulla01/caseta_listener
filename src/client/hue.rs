@@ -52,6 +52,7 @@ impl HueClient {
             .expect("unable to parse grouped_light url");
         debug!(request_url=?url, "calling out to {}", url.as_str());
         let response = self.http_client.get(url).send().await?;
+        debug!("got get_grouped_light response: {:?}", response);
         response
             .json::<HueResponse<GroupedLight>>()
             .await
@@ -65,6 +66,7 @@ impl HueClient {
             .join("room")
             .expect("this should always be a well formed URL");
         let response = self.http_client.get(url).send().await.unwrap();
+        debug!("got get_rooms response: {:?}", response);
 
         let rooms = response.json::<HueResponse<HueRoom>>().await?;
         let mut rooms_by_id: HashMap<Uuid, HueRoom> = HashMap::new();
@@ -92,7 +94,7 @@ impl HueClient {
             .on(LightGroupOn::ON)
             .build();
         let response = self.http_client.put(url).json(&request_body).send().await?;
-
+        debug!("got update_brightness response: {:?}", response);
         let status = response.status();
         if !status.is_success() {
             let response_body = response.text().await?;
@@ -117,6 +119,7 @@ impl HueClient {
         let request_body = GroupedLightPutBody::builder().on(LightGroupOn::OFF).build();
 
         let response = self.http_client.put(url).json(&request_body).send().await?;
+        debug!("got turn_off response: {:?}", response);
         let status = response.status();
         if !status.is_success() {
             let response_body = response.text().await?;
@@ -145,6 +148,7 @@ impl HueClient {
         let body = RecallSceneBody::new(brightness);
 
         let response = self.http_client.put(url).json(&body).send().await?;
+        debug!("got recall_scene response: {:?}", response);
         let status = response.status();
         if !status.is_success() {
             let response_body = response.text().await?;
